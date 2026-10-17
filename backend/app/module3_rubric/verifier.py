@@ -168,8 +168,26 @@ class FourStateVerifier:
                 verdict = VerdictEnum.CLAIMED_ONLY
                 level = "Beginner"
 
-            # Check if contradicted by fork with zero lines
-            if evidence_doc.is_fork and evidence_doc.candidate_authorship_pct < 10.0:
+            # Check if contradicted by fork with zero lines or commit laundering
+            if evidence_doc.signals.commit_laundering_detected:
+                verdict = VerdictEnum.CONTRADICTED
+                if not any("Commit Laundering" in r.reason for r in refusals_out):
+                    audit_tracer.record(
+                        step="COMMIT_LAUNDERING_CHECK",
+                        target=skill_name,
+                        rule_applied="RULE_COMMIT_LAUNDERING_DUMP",
+                        verdict_reached="CONTRADICTED"
+                    )
+                    refusals_out.append(
+                        RefusalItem(
+                            claim=f"Iterative development history in {skill_name}",
+                            verdict=VerdictEnum.CONTRADICTED,
+                            reason="Commit Laundering Detected: Bulk initial upload without iterative commit history.",
+                            evidence_found=f"Initial commit accounts for >80% of lines across {evidence_doc.signals.commit_count} total commit(s).",
+                            suggested_remedy="Publish repositories demonstrating continuous incremental commits showing natural feature development."
+                        )
+                    )
+            elif evidence_doc.is_fork and evidence_doc.candidate_authorship_pct < 10.0:
                 verdict = VerdictEnum.CONTRADICTED
 
             evidence_score, ev_reason = self.scoring.calculate_evidence_score(

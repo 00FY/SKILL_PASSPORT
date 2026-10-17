@@ -20,12 +20,29 @@ class ASTAnalyzer:
             "frameworks_detected": set(),
         }
 
+        EXCLUDED_DIRS = {
+            "node_modules", "vendor", "dist", "build", ".git", ".next",
+            "__pycache__", ".pytest_cache", ".venv", "venv", "env", "migrations"
+        }
+
         for root, dirs, files in os.walk(repo_path):
-            if any(p in root for p in ["node_modules", ".git", "venv", "__pycache__"]):
-                continue
+            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
 
             for file in files:
+                if file in ["package-lock.json", "yarn.lock", "pnpm-lock.yaml"]:
+                    continue
+
                 full_path = os.path.join(root, file)
+
+                # Ignore empty __init__.py files
+                if file == "__init__.py":
+                    try:
+                        with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                            if not f.read().strip():
+                                continue
+                    except Exception:
+                        continue
+
                 if file.endswith(".py"):
                     self._analyze_python_file(full_path, results)
                 elif file.endswith((".js", ".ts", ".tsx", ".jsx")):

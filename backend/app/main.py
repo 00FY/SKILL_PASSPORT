@@ -126,9 +126,15 @@ def submit_quiz(sub: QuizSubmission):
 
 # --- Cryptographic Verification ---
 @app.post("/api/verify-signature")
-def verify_signature(payload: Dict[str, Any] = Body(...), claimed_hash: str = Form(...)):
-    is_valid = CryptoSigner.verify_passport(payload, claimed_hash)
-    return {"is_valid": is_valid, "claimed_hash": claimed_hash}
+def verify_signature(payload: Dict[str, Any] = Body(...), claimed_hash: Optional[str] = None):
+    target_hash = claimed_hash or payload.get("tamper_proof_hash", "")
+    result = CryptoSigner.verify_passport_signature(payload, target_hash)
+    return {
+        "valid": result["valid"],
+        "is_valid": result["valid"],
+        "reason": result["reason"],
+        "claimed_hash": target_hash
+    }
 
 # --- Pre-computed Demo Personas (Offline Hackathon Reliability) ---
 @app.get("/api/demo/{persona}", response_model=PassportDocument)

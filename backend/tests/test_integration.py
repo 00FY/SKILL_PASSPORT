@@ -15,7 +15,7 @@ def test_demo_priya_endpoint():
     data = res.json()
     assert data["candidate_name"] == "Priya S."
     assert data["role_match_pct"] > 60
-    assert data["tamper_proof_hash"].startswith("sha256:")
+    assert data["tamper_proof_hash"].startswith("hmac-sha256:")
     assert len(data["skills"]) >= 2
     assert len(data["refusal_panel"]) >= 1
 
@@ -34,7 +34,23 @@ def test_demo_redteam_security_alert():
     assert res.status_code == 200
     data = res.json()
     assert len(data["security_alerts"]) >= 1
-    assert any(a["flag_type"] == "PROMPT_INJECTION_DETECTED" for a in data["security_alerts"])
+    assert any(a["flag_type"] == "STEGANOGRAPHY_OR_INJECTION" and a["severity"] == "CRITICAL" for a in data["security_alerts"])
+
+def test_verify_signature_endpoint():
+    priya_res = client.get("/api/demo/priya")
+    priya_data = priya_res.json()
+    verify_res = client.post("/api/verify-signature", json=priya_data)
+    assert verify_res.status_code == 200
+    verify_data = verify_res.json()
+    assert verify_data["valid"] is True
+    assert "HMAC-SHA256" in verify_data["reason"]
+
+    # Tamper payload
+    priya_data["overall_score"] = 99
+    tamper_res = client.post("/api/verify-signature", json=priya_data)
+    tamper_data = tamper_res.json()
+    assert tamper_data["valid"] is False
+    assert "Signature verification failed" in tamper_data["reason"]
 
 def test_quiz_and_submission():
     res = client.get("/api/quiz/Python")

@@ -94,12 +94,44 @@ def test_question_bank_and_grader():
 def test_tamper_proof_crypto_signer():
     data = {"candidate_name": "Priya S.", "role_match_pct": 72, "overall_score": 62}
     signature = CryptoSigner.sign_passport(data)
-    assert signature.startswith("sha256:")
+    assert signature.startswith("hmac-sha256:")
+    
+    # Test helper function verify_passport_signature
+    res = CryptoSigner.verify_passport_signature(data, signature)
+    assert res["valid"] is True
+    assert "HMAC-SHA256" in res["reason"]
     assert CryptoSigner.verify_passport(data, signature) is True
 
-    # Tampered data should fail verification
+    # Tampered data should fail verification with descriptive reason
     tampered_data = {"candidate_name": "Priya S.", "role_match_pct": 99, "overall_score": 62}
-    assert CryptoSigner.verify_passport(tampered_data, signature) is False
+    tampered_res = CryptoSigner.verify_passport_signature(tampered_data, signature)
+    assert tampered_res["valid"] is False
+    assert "Signature verification failed" in tampered_res["reason"]
+
+def test_commit_laundering_detected_contradiction():
+    verifier = FourStateVerifier()
+    audit = AuditTracer("Alex R.")
+    claims = ClaimsDocument(
+        candidate_name="Alex R.",
+        applied_role="Backend Developer",
+        claims=[ClaimItem(id="c1", skill="Python", category="language", claimed_duration_months=36)]
+    )
+    evidence = EvidenceDocument(
+        repo_url="https://github.com/alex/bulk-dump",
+        candidate_authorship_pct=95.0,
+        active_months=1,
+        skills_detected={"Python": SkillEvidence(lines_authored=3000, files_count=5)},
+        signals=QualitySignals(
+            has_tests=False,
+            commit_laundering_detected=True,
+            commit_count=1
+        )
+    )
+    skills, refusals, _, _, _ = verifier.evaluate(claims, evidence, audit)
+    py_skill = next(s for s in skills if s.name == "Python")
+    assert py_skill.verdict == VerdictEnum.CONTRADICTED
+    contradicted_refusal = next(r for r in refusals if r.verdict == VerdictEnum.CONTRADICTED)
+    assert "Commit Laundering Detected: Bulk initial upload without iterative commit history." in contradicted_refusal.reason
 
 def test_what_if_simulator():
     service = PassportService()

@@ -18,6 +18,19 @@ class PDFParser:
             if text:
                 full_text.append(text)
 
+            # Check for micro-font steganography (< 2pt font size)
+            micro_text = []
+            def visitor_body(t, cm, tm, font_dict, font_size):
+                if font_size is not None and font_size < 2.0 and t.strip():
+                    micro_text.append(t.strip())
+
+            try:
+                page.extract_text(visitor_text=visitor_body)
+                if micro_text:
+                    full_text.append(f"style='font-size: 1pt; color: #ffffff' [MICRO_FONT: {' '.join(micro_text)}]")
+            except Exception:
+                pass
+
             # Extract any annotations or link objects embedded in PDF
             if "/Annots" in page:
                 for annot in page["/Annots"]:

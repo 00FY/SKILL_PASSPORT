@@ -96,6 +96,7 @@ class EvidenceHarvesterService:
                 merged_prs=1 if blame_res.get("total_commits", 0) > 5 else 0,
                 deployed_url="https://api-service.onrender.com" if "FastAPI" in skills_detected else None,
                 single_day_commit_dump=blame_res.get("single_day_commit_dump", False),
+                commit_laundering_detected=blame_res.get("commit_laundering_detected", False),
                 commit_count=blame_res.get("total_commits", 0)
             )
 

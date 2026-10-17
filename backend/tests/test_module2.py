@@ -84,3 +84,36 @@ def test_harvester_service_conforms_to_contract(sample_git_repo):
     assert doc.signals.test_framework == "pytest"
     assert "Python" in doc.skills_detected
     assert "FastAPI" in doc.skills_detected
+
+def test_boilerplate_exclusions_and_single_commit_dump():
+    tmp_dir = tempfile.mkdtemp(prefix="test_dump_repo_")
+    repo = git.Repo.init(tmp_dir)
+    repo.config_writer().set_value("user", "name", "Alex R.").release()
+    repo.config_writer().set_value("user", "email", "alex@example.com").release()
+
+    # Add boilerplate files that must be excluded
+    migrations_dir = os.path.join(tmp_dir, "migrations")
+    os.makedirs(migrations_dir, exist_ok=True)
+    with open(os.path.join(migrations_dir, "0001_initial.py"), "w") as f:
+        f.write("# auto generated migration\n")
+
+    # Empty __init__.py
+    with open(os.path.join(tmp_dir, "__init__.py"), "w") as f:
+        f.write("   \n")
+
+    # Main code file
+    main_py = os.path.join(tmp_dir, "main.py")
+    with open(main_py, "w") as f:
+        f.write("def run():\n    print('Hello World')\n")
+
+    repo.index.add([os.path.join(migrations_dir, "0001_initial.py"), os.path.join(tmp_dir, "__init__.py"), main_py])
+    repo.index.commit("Initial bulk dump commit")
+
+    blame = GitBlameAnalyzer()
+    res = blame.analyze_repo(tmp_dir, candidate_email_or_name="Alex R.")
+    # Single-commit dump with 1 commit containing 100% of lines should trigger laundering detection
+    assert res["commit_laundering_detected"] is True
+    assert res["total_commits"] == 1
+    # Migrations and empty __init__.py should not be included in snippets or inflated line count
+    assert "__init__.py" not in [s.get("file") for s in res["snippets_by_lang"].values()]
+    assert "0001_initial.py" not in [s.get("file") for s in res["snippets_by_lang"].values()]

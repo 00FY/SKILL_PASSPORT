@@ -55,6 +55,7 @@ class QualitySignals(BaseModel):
     merged_prs: int = 0
     deployed_url: Optional[str] = None
     single_day_commit_dump: bool = False
+    commit_laundering_detected: bool = False
     commit_count: int = 0
 
 class EvidenceDocument(BaseModel):
