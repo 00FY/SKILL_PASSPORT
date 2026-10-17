@@ -1,0 +1,45 @@
+# Launch Copy: Skill Passport
+
+### Option 1: Punchy / X (< 280 chars)
+Resumes lie. Prompts cheat. Git Blame doesn't. 🛡️
+
+Introducing Skill Passport: Ground-truth engineering competency verification.
+AST static analysis + line-by-line git blame + HMAC-SHA256 seals.
+LLMs extract text. Deterministic math scores evidence.
+
+Try it: [github.com/00FY/SKILL_PASSPORT]
+
+---
+
+### Option 2: Story / LinkedIn
+Over 60% of technical resumes now contain AI-generated claims or copy-pasted repos. Keyword matchers and LLM evaluators are easily duped by prompt injection and single-commit fork dumps.
+
+We built Skill Passport to fix this with forensic proof, not blind trust.
+
+Here's how our 4-module engine works:
+1. Ingestion & Guard: Sanitizes prompt injections (zero-width chars, white font tricks).
+2. Git Blame & AST Detective: Analyzes line-by-line authorship (`git blame -w -M -C`) and verifies syntax structures (`@app.get`, `assert`, decorators).
+3. Deterministic Judge: Published rubric scores evidence ($E_i \times G_i$). Fork cloners drop to the Refusal Queue; verified engineers get an HMAC-SHA256 cryptographic seal.
+4. Executive Dashboard & Growth Portal: Interactive what-if simulator to see exactly how adding unit tests or docs improves candidate scores.
+
+No AI hallucinations. Pure code-level proof.
+
+Check out the demo video and repo: [LINK]
+
+---
+
+### Option 3: Show HN / Reddit (Technical & Direct)
+Show HN: Skill Passport – Deterministic, Git-Blame-Backed Competency Verification
+
+Most candidate screening tools either rely on keyword regexes or prompt an LLM to "grade" a candidate (which invites prompt injection and hallucinated scores).
+
+Skill Passport splits the problem:
+- LLMs only extract text and claims from resumes.
+- Deterministic rules and static analysis score evidence.
+
+We run `git blame -w -M -C --line-porcelain` against candidate repos (filtering boilerplate and single-commit dumps), parse AST for declared skills (FastAPI routes, Pytest assertions, async handlers), and compute a weighted composite score ($E_i \times G_i$). The final audit certificate is cryptographically signed with HMAC-SHA256 so tampering can be rejected in real time.
+
+Built with Python, FastAPI, React/Vite, GSAP, and Tailwind. 100% test coverage with Pytest and CI automation.
+
+Repo: https://github.com/00FY/SKILL_PASSPORT
+Feedback on the scoring rubric and injection guard patterns welcome!
