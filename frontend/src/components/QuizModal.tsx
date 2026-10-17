@@ -61,61 +61,58 @@ export const QuizModal: React.FC<QuizModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md overflow-y-auto">
-      <div className="w-full max-w-2xl bg-[#0e131f] border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col my-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
+      <div className="w-full max-w-2xl bg-[#101112] border border-[#232426] rounded shadow-2xl overflow-hidden flex flex-col my-8 card-inner-glow">
         {/* Header */}
-        <div className="p-6 border-b border-white/10 bg-slate-900/60 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold">
-              <Award className="w-5 h-5" />
+        <div className="p-4 px-6 border-b border-[#1B1C1E] bg-[#0e0e0f] flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded bg-[#1c1b1d] border border-[#2a2a2b] flex items-center justify-center text-[#5E6BFF]">
+              <Award className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-white tracking-tight">
+              <h3 className="font-heading font-bold text-base text-[#e5e2e3] tracking-tight">
                 Skill Challenge Test: {skillName}
               </h3>
-              <p className="text-xs text-slate-400">
+              <p className="text-[11px] font-mono text-[#9A9DA3]">
                 15-Question Technical Challenge (Basic, Intermediate, Advanced)
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
+            className="p-1.5 text-[#9A9DA3] hover:text-[#e5e2e3] rounded hover:bg-[#1c1b1d] transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+        <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
           {/* Results Banner if Submitted */}
           {submitted && results && (
-            <div className="glass-panel rounded-2xl p-6 border border-emerald-500/30 bg-emerald-950/20 text-center space-y-3 animate-fadeIn">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-500/30">
-                CHALLENGE EVALUATION COMPLETE
-              </div>
+            <div className="bg-[#151617] rounded border border-[#50d8e9]/30 p-5 text-center space-y-3 card-inner-glow">
+              <span className="text-[10px] font-mono font-bold text-[#50d8e9] bg-[#50d8e9]/10 px-2 py-0.5 rounded border border-[#50d8e9]/20 uppercase">
+                Challenge Evaluation Complete
+              </span>
               <div className="flex items-center justify-center gap-6">
                 <div>
-                  <p className="text-xs text-slate-400 uppercase font-semibold">Score</p>
-                  <p className="text-3xl font-black text-white">{results.correct} / {results.total}</p>
+                  <p className="text-[10px] font-mono text-[#9A9DA3] uppercase">Correct</p>
+                  <p className="font-heading font-extrabold text-2xl text-[#e5e2e3]">{results.correct} / {results.total}</p>
                 </div>
-                <div className="h-10 w-px bg-white/10" />
+                <div className="h-8 w-px bg-[#1B1C1E]" />
                 <div>
-                  <p className="text-xs text-slate-400 uppercase font-semibold">Awarded Grade</p>
-                  <p className="text-3xl font-black text-emerald-400">{results.grade}</p>
+                  <p className="text-[10px] font-mono text-[#9A9DA3] uppercase">Grade</p>
+                  <p className="font-heading font-extrabold text-2xl text-[#50d8e9]">{results.grade}</p>
                 </div>
-                <div className="h-10 w-px bg-white/10" />
+                <div className="h-8 w-px bg-[#1B1C1E]" />
                 <div>
-                  <p className="text-xs text-slate-400 uppercase font-semibold">Grade Weight</p>
-                  <p className="text-3xl font-black text-teal-400">×{results.gradeWeight}</p>
+                  <p className="text-[10px] font-mono text-[#9A9DA3] uppercase">Multiplier</p>
+                  <p className="font-heading font-extrabold text-2xl text-[#bec2ff]">×{results.gradeWeight}</p>
                 </div>
               </div>
-              <p className="text-xs text-slate-300">
-                Evaluated against published rubric. Click below to apply your new grade to your Skill Passport!
-              </p>
               <button
                 onClick={handleApplyToPassport}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/30 transition-all"
+                className="px-5 py-2 rounded bg-[#5E6BFF] hover:bg-[#4d5bff] text-white font-semibold text-xs transition-all shadow-md shadow-[#5E6BFF]/20"
               >
                 Apply Grade to Passport
               </button>
@@ -123,24 +120,24 @@ export const QuizModal: React.FC<QuizModalProps> = ({
           )}
 
           {/* Question List */}
-          <div className="space-y-6">
+          <div className="space-y-4">
             {questions.map((q, idx) => (
-              <div key={q.id} className="p-4 rounded-xl bg-slate-900/50 border border-white/5 space-y-3">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-mono text-slate-400">Question {idx + 1} of {questions.length}</span>
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                    q.difficulty === 'Basic' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
-                    q.difficulty === 'Intermediate' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
-                    'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+              <div key={q.id} className="p-4 rounded bg-[#151617] border border-[#1B1C1E] space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-[#9A9DA3]">QUESTION {idx + 1} OF {questions.length}</span>
+                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase ${
+                    q.difficulty === 'Basic' ? 'bg-[#50d8e9]/10 text-[#50d8e9] border border-[#50d8e9]/20' :
+                    q.difficulty === 'Intermediate' ? 'bg-[#ffb689]/10 text-[#ffb689] border border-[#ffb689]/20' :
+                    'bg-[#bec2ff]/10 text-[#bec2ff] border border-[#bec2ff]/20'
                   }`}>
                     {q.difficulty}
                   </span>
                 </div>
-                <h4 className="text-sm font-semibold text-white leading-relaxed">
+                <h4 className="text-xs font-semibold text-[#e5e2e3] leading-relaxed">
                   {q.question}
                 </h4>
 
-                <div className="space-y-2 pt-1">
+                <div className="space-y-1.5 pt-1">
                   {q.options.map((opt, optIdx) => {
                     const isSelected = selectedAnswers[q.id] === optIdx;
                     const isCorrect = submitted && optIdx === q.correct_index;
@@ -151,26 +148,26 @@ export const QuizModal: React.FC<QuizModalProps> = ({
                         key={optIdx}
                         disabled={submitted}
                         onClick={() => handleSelect(q.id, optIdx)}
-                        className={`w-full text-left p-3 rounded-xl text-xs font-medium border transition-all flex items-center justify-between ${
+                        className={`w-full text-left p-2.5 rounded text-xs font-mono transition-all flex items-center justify-between border ${
                           isCorrect
-                            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                            ? 'bg-[#50d8e9]/10 border-[#50d8e9]/40 text-[#50d8e9]'
                             : isWrong
-                            ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                            ? 'bg-[#93000a]/20 border-[#ffb4ab]/40 text-[#ffb4ab]'
                             : isSelected
-                            ? 'bg-white/10 border-white/30 text-white'
-                            : 'bg-slate-900/80 border-white/5 text-slate-300 hover:border-white/15'
+                            ? 'bg-[#1c1b1d] border-[#5E6BFF] text-[#e5e2e3]'
+                            : 'bg-[#101112] border-[#1B1C1E] text-[#c6c5d8] hover:border-[#2a2a2b]'
                         }`}
                       >
                         <span>{opt}</span>
-                        {isCorrect && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+                        {isCorrect && <CheckCircle2 className="w-3.5 h-3.5 text-[#50d8e9] shrink-0" />}
                       </button>
                     );
                   })}
                 </div>
 
                 {submitted && (
-                  <p className="text-[11px] text-slate-400 pt-2 border-t border-white/5">
-                    <strong>Explanation:</strong> {q.explanation}
+                  <p className="text-[10px] font-mono text-[#9A9DA3] pt-2 border-t border-[#1B1C1E]">
+                    <strong>Note:</strong> {q.explanation}
                   </p>
                 )}
               </div>
@@ -179,22 +176,20 @@ export const QuizModal: React.FC<QuizModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-white/10 bg-slate-900/80 flex items-center justify-between">
-          <span className="text-xs text-slate-400">
-            {Object.keys(selectedAnswers).length} of {questions.length} answered
-          </span>
+        <div className="p-3.5 px-6 border-t border-[#1B1C1E] bg-[#0e0e0f] flex items-center justify-between text-xs font-mono text-[#9A9DA3]">
+          <span>{Object.keys(selectedAnswers).length} of {questions.length} answered</span>
           {!submitted ? (
             <button
               onClick={handleSubmit}
               disabled={Object.keys(selectedAnswers).length === 0}
-              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-all shadow-md shadow-emerald-600/20"
+              className="px-4 py-1.5 bg-[#5E6BFF] hover:bg-[#4d5bff] disabled:opacity-50 text-white rounded font-semibold transition-all"
             >
-              Submit & Grade Challenge
+              Submit & Grade
             </button>
           ) : (
             <button
               onClick={onClose}
-              className="px-5 py-2 text-slate-400 hover:text-white text-xs font-semibold rounded-xl"
+              className="px-4 py-1.5 text-[#9A9DA3] hover:text-white rounded"
             >
               Close
             </button>

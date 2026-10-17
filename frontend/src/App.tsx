@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Navbar } from './components/Navbar';
+import { Sidebar } from './components/Sidebar';
+import { Header } from './components/Header';
 import { RecruiterView } from './components/RecruiterView';
 import { StudentView } from './components/StudentView';
 import { EvidenceDrawer } from './components/EvidenceDrawer';
@@ -10,14 +11,16 @@ import {
   MOCK_PRIYA, MOCK_ALEX, MOCK_JORDAN, MOCK_REDTEAM,
   PassportDocument, SkillPassportItem
 } from './data/mockData';
-import { ShieldCheck, CheckCircle2, Lock, GitFork, BookOpen, ExternalLink } from 'lucide-react';
+import { ShieldCheck, Lock, Activity } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [currentPersonaKey, setCurrentPersonaKey] = useState<string>('priya');
   const [passport, setPassport] = useState<PassportDocument>(MOCK_PRIYA);
   const [activeView, setActiveView] = useState<'recruiter' | 'student'>('recruiter');
+  const [activeTab, setActiveTab] = useState<'overview' | 'telemetry' | 'refusals' | 'simulator'>('overview');
+  const [selectedTimeframe, setSelectedTimeframe] = useState<string>('ALL');
 
-  // Modals state
+  // Modals
   const [selectedSkill, setSelectedSkill] = useState<SkillPassportItem | null>(null);
   const [quizSkillName, setQuizSkillName] = useState<string | null>(null);
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState<boolean>(false);
@@ -39,7 +42,7 @@ export const App: React.FC = () => {
         return;
       }
     } catch {
-      // Fallback to embedded mock data for 100% offline reliability
+      // Fallback
     }
 
     if (key === 'priya') setPassport(MOCK_PRIYA);
@@ -73,7 +76,6 @@ export const App: React.FC = () => {
       // Offline fallback
     }
 
-    // Client-side simulation fallback
     let boost = 0;
     if (toggles.add_pytest) boost += 9;
     if (toggles.add_deploy) boost += 8;
@@ -123,48 +125,86 @@ export const App: React.FC = () => {
     setTimeout(() => setSignatureVerifiedNotice(false), 4000);
   };
 
+  const handleSelectRefusalsTab = () => {
+    setActiveTab('refusals');
+    const el = document.getElementById('refusals-section');
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  };
+
   return (
-    <div className="min-h-screen bg-[#0a0d14] text-slate-100 flex flex-col font-sans">
-      {/* Top Navigation */}
-      <Navbar
+    <div className="min-h-screen bg-[#131314] text-[#e5e2e3] flex flex-row font-sans selection:bg-[#5E6BFF] selection:text-white">
+      {/* Romer Left Sidebar Dock */}
+      <Sidebar
         currentPersona={currentPersonaKey}
         onSelectPersona={handleSelectPersona}
         activeView={activeView}
         onSelectView={setActiveView}
         onOpenUpload={() => setIsUploadModalOpen(true)}
         onOpenSecurityModal={() => setIsSecurityModalOpen(true)}
-        tamperProofHash={passport.tamper_proof_hash}
         hasSecurityAlerts={passport.security_alerts && passport.security_alerts.length > 0}
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
       />
 
-      {/* Cryptographic Signature Toast */}
-      {signatureVerifiedNotice && (
-        <div className="fixed top-20 right-6 z-50 p-4 rounded-2xl bg-[#0e1626] border border-emerald-500/40 shadow-2xl flex items-center gap-3 animate-fadeIn text-xs">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-400">
-            <ShieldCheck className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="font-bold text-white">Cryptographic Fingerprint Verified</p>
-            <p className="text-slate-400 font-mono text-[11px] truncate max-w-xs">{passport.tamper_proof_hash}</p>
-          </div>
-        </div>
-      )}
+      {/* Main Command View Area */}
+      <div className="flex-1 md:ml-64 flex flex-col min-h-screen overflow-x-hidden">
+        {/* Top Header */}
+        <Header
+          candidateName={passport.candidate_name}
+          appliedRole={passport.applied_role}
+          tamperProofHash={passport.tamper_proof_hash}
+          onVerifySignature={handleVerifySignature}
+          selectedTimeframe={selectedTimeframe}
+          onSelectTimeframe={setSelectedTimeframe}
+          activeView={activeView}
+        />
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeView === 'recruiter' ? (
-          <RecruiterView
-            passport={passport}
-            onSelectSkill={setSelectedSkill}
-            onVerifySignature={handleVerifySignature}
-          />
-        ) : (
-          <StudentView
-            passport={passport}
-            onSimulateScore={handleSimulateScore}
-          />
+        {/* Cryptographic Toast Notice */}
+        {signatureVerifiedNotice && (
+          <div className="fixed top-16 right-6 z-50 p-3 rounded bg-[#101112] border border-[#50d8e9]/40 shadow-2xl flex items-center gap-3 animate-fadeIn text-xs font-mono">
+            <div className="w-7 h-7 rounded bg-[#50d8e9]/10 flex items-center justify-center text-[#50d8e9]">
+              <ShieldCheck className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="font-bold text-[#e5e2e3]">Cryptographic Seal Verified</p>
+              <p className="text-[#9A9DA3] text-[10px] truncate max-w-xs">{passport.tamper_proof_hash}</p>
+            </div>
+          </div>
         )}
-      </main>
+
+        {/* Content Body */}
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
+          {activeView === 'recruiter' ? (
+            <RecruiterView
+              passport={passport}
+              onSelectSkill={setSelectedSkill}
+              onVerifySignature={handleVerifySignature}
+              selectedTimeframe={selectedTimeframe}
+              onSelectRefusalsTab={handleSelectRefusalsTab}
+            />
+          ) : (
+            <StudentView
+              passport={passport}
+              onSimulateScore={handleSimulateScore}
+            />
+          )}
+        </main>
+
+        {/* Romer Terminal Footer */}
+        <footer className="border-t border-[#1B1C1E] bg-[#0e0e0f] py-3 px-6 text-xs font-mono text-[#9A9DA3] flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Lock className="w-3.5 h-3.5 text-[#50d8e9]" />
+            <span>THE GOLDEN RULE: <strong className="text-[#e5e2e3]">"LLM extracts text, published rules score evidence."</strong></span>
+          </div>
+          <div className="flex items-center gap-3 text-[10px] text-[#454655]">
+            <span>ENGINE: DETERMINISTIC 4-STATE</span>
+            <span>•</span>
+            <span>BLAME: GIT AUTHORSHIP %</span>
+            <span>•</span>
+            <span>CRYPTO: SHA-256</span>
+          </div>
+        </footer>
+      </div>
 
       {/* Slide-over Evidence Drawer */}
       <EvidenceDrawer
@@ -200,25 +240,6 @@ export const App: React.FC = () => {
         onClose={() => setIsUploadModalOpen(false)}
         onCustomVerified={handleCustomVerified}
       />
-
-      {/* Footer / Architectural Golden Rule Banner */}
-      <footer className="border-t border-white/5 bg-[#07090f] py-6 text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
-          <div className="flex items-center gap-2">
-            <Lock className="w-4 h-4 text-emerald-500" />
-            <span className="text-slate-400 font-medium">
-              Skill Passport: <span className="text-emerald-400">"LLM extracts text, published rules score evidence."</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-4 text-[11px] font-mono text-slate-500">
-            <span>Deterministic 4-State Engine</span>
-            <span>•</span>
-            <span>Git Blame Authorship</span>
-            <span>•</span>
-            <span>SHA-256 Tamper-Proof</span>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 };
