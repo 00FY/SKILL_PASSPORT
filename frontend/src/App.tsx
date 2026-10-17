@@ -181,6 +181,8 @@ export const App: React.FC = () => {
               onVerifySignature={handleVerifySignature}
               selectedTimeframe={selectedTimeframe}
               onSelectRefusalsTab={handleSelectRefusalsTab}
+              activeTab={activeTab}
+              onSelectTab={setActiveTab}
             />
           ) : (
             <StudentView

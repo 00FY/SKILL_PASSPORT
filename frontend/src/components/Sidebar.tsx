@@ -82,9 +82,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           <button
-            onClick={() => onSelectTab('overview')}
+            onClick={() => {
+              onSelectView('recruiter');
+              onSelectTab('overview');
+            }}
             className={`w-full flex items-center gap-2.5 px-4 py-2 text-xs font-semibold tracking-wider uppercase transition-all text-left ${
-              activeTab === 'overview'
+              activeTab === 'overview' && activeView === 'recruiter'
                 ? 'bg-[#151617] text-[#50d8e9] border-r-2 border-[#50d8e9]'
                 : 'text-[#c6c5d8] hover:text-[#e5e2e3] hover:bg-[#151617]/50'
             }`}
@@ -94,9 +97,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
 
           <button
-            onClick={() => onSelectTab('telemetry')}
+            onClick={() => {
+              onSelectView('recruiter');
+              onSelectTab('telemetry');
+            }}
             className={`w-full flex items-center gap-2.5 px-4 py-2 text-xs font-semibold tracking-wider uppercase transition-all text-left ${
-              activeTab === 'telemetry'
+              activeTab === 'telemetry' && activeView === 'recruiter'
                 ? 'bg-[#151617] text-[#50d8e9] border-r-2 border-[#50d8e9]'
                 : 'text-[#c6c5d8] hover:text-[#e5e2e3] hover:bg-[#151617]/50'
             }`}
@@ -106,9 +112,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
 
           <button
-            onClick={() => onSelectTab('refusals')}
+            onClick={() => {
+              onSelectView('recruiter');
+              onSelectTab('refusals');
+            }}
             className={`w-full flex items-center gap-2.5 px-4 py-2 text-xs font-semibold tracking-wider uppercase transition-all text-left ${
-              activeTab === 'refusals'
+              activeTab === 'refusals' && activeView === 'recruiter'
                 ? 'bg-[#151617] text-[#ffb4ab] border-r-2 border-[#ffb4ab]'
                 : 'text-[#c6c5d8] hover:text-[#e5e2e3] hover:bg-[#151617]/50'
             }`}
@@ -123,7 +132,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               onSelectTab('simulator');
             }}
             className={`w-full flex items-center gap-2.5 px-4 py-2 text-xs font-semibold tracking-wider uppercase transition-all text-left ${
-              activeTab === 'simulator'
+              activeView === 'student' || activeTab === 'simulator'
                 ? 'bg-[#151617] text-[#ffb689] border-r-2 border-[#ffb689]'
                 : 'text-[#c6c5d8] hover:text-[#e5e2e3] hover:bg-[#151617]/50'
             }`}
