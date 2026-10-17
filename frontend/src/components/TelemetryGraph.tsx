@@ -14,6 +14,36 @@ export const TelemetryGraph: React.FC<TelemetryGraphProps> = ({
   hasTests,
   timeframe
 }) => {
+  // Dynamically map percentage [0..100] to SVG Y coordinate [115..10]
+  const pctToY = (pct: number) => {
+    const clamped = Math.max(0, Math.min(100, pct));
+    return Number((115 - (clamped / 100) * 105).toFixed(1));
+  };
+
+  const finalY = pctToY(authorshipPct);
+  const mid3Y = pctToY(authorshipPct * 0.85);
+  const mid2Y = pctToY(authorshipPct * 0.65);
+  const mid1Y = pctToY(authorshipPct * 0.35);
+  const startY = pctToY(authorshipPct * 0.15);
+
+  // AST / Tests curve
+  const astFinalPct = hasTests ? Math.min(95, authorshipPct * 0.9 + 10) : Math.max(15, authorshipPct * 0.4);
+  const astFinalY = pctToY(astFinalPct);
+  const astMid2Y = pctToY(astFinalPct * 0.6);
+  const astMid1Y = pctToY(astFinalPct * 0.3);
+  const astStartY = pctToY(astFinalPct * 0.1);
+
+  // Dynamic timeline labels based on activeMonths
+  const m1 = 1;
+  const m2 = Math.max(2, Math.round(activeMonths * 0.3));
+  const m3 = Math.max(3, Math.round(activeMonths * 0.6));
+  const m4 = Math.max(4, Math.round(activeMonths * 0.85));
+  const m5 = Math.max(5, activeMonths);
+
+  const candidatePath = `M0,${startY} Q50,${(startY + mid1Y) / 2} 100,${mid1Y} T200,${mid2Y} T320,${mid3Y} T500,${finalY}`;
+  const candidateArea = `M0,${startY} Q50,${(startY + mid1Y) / 2} 100,${mid1Y} T200,${mid2Y} T320,${mid3Y} T500,${finalY} L500,120 L0,120 Z`;
+  const astPath = `M0,${astStartY} Q60,${(astStartY + astMid1Y) / 2} 120,${astMid1Y} T240,${astMid2Y} T360,${pctToY(astFinalPct * 0.75)} T500,${astFinalY}`;
+
   return (
     <div className="bg-[#151617] border border-[#232426] rounded flex flex-col overflow-hidden relative">
       {/* Telemetry Header */}
@@ -63,21 +93,21 @@ export const TelemetryGraph: React.FC<TelemetryGraphProps> = ({
 
             {/* Line 1 (Cyan): Candidate Code Authorship & Commits */}
             <path
-              d="M0,95 Q50,85 100,75 T200,45 T320,30 T420,18 T500,12"
+              d={candidatePath}
               fill="none"
               stroke="#50d8e9"
               strokeWidth="2.5"
             />
             {/* Ambient Cyan Area under curve */}
             <path
-              d="M0,95 Q50,85 100,75 T200,45 T320,30 T420,18 T500,12 L500,120 L0,120 Z"
+              d={candidateArea}
               fill="url(#cyanGradient)"
               opacity="0.15"
             />
 
             {/* Line 2 (Violet): AST Validated Routes & Tests */}
             <path
-              d="M0,110 Q60,105 120,90 T240,65 T360,40 T440,32 T500,24"
+              d={astPath}
               fill="none"
               stroke="#7a85ff"
               strokeWidth="2"
@@ -86,10 +116,10 @@ export const TelemetryGraph: React.FC<TelemetryGraphProps> = ({
             />
 
             {/* Key Milestone Nodes */}
-            <circle cx="100" cy="75" r="3.5" fill="#50d8e9" />
-            <circle cx="200" cy="45" r="3.5" fill="#50d8e9" />
-            <circle cx="320" cy="30" r="3.5" fill="#50d8e9" />
-            <circle cx="500" cy="12" r="4.5" fill="#50d8e9" className="animate-pulse" />
+            <circle cx="100" cy={mid1Y} r="3.5" fill="#50d8e9" />
+            <circle cx="200" cy={mid2Y} r="3.5" fill="#50d8e9" />
+            <circle cx="320" cy={mid3Y} r="3.5" fill="#50d8e9" />
+            <circle cx="500" cy={finalY} r="4.5" fill="#50d8e9" className="animate-pulse" />
 
             <defs>
               <linearGradient id="cyanGradient" x1="0" y1="0" x2="0" y2="1">
@@ -102,11 +132,11 @@ export const TelemetryGraph: React.FC<TelemetryGraphProps> = ({
 
         {/* X Axis Timeline Labels */}
         <div className="w-full border-t border-[#1B1C1E] mt-2 pt-1.5 flex justify-between font-mono text-[10px] text-[#454655] pl-8 pr-2">
-          <span>Month 01 (Initial Setup)</span>
-          <span>Month 04 (Core API)</span>
-          <span>Month 08 (Microservices)</span>
-          <span>Month 12 (Pytest Suite)</span>
-          <span>Month 14 (Deploy on Render)</span>
+          <span>Month {m1 < 10 ? `0${m1}` : m1} (Setup)</span>
+          <span>Month {m2 < 10 ? `0${m2}` : m2} (Alpha)</span>
+          <span>Month {m3 < 10 ? `0${m3}` : m3} (Features)</span>
+          <span>Month {m4 < 10 ? `0${m4}` : m4} (Tests)</span>
+          <span>Month {m5 < 10 ? `0${m5}` : m5} (Active)</span>
         </div>
       </div>
     </div>

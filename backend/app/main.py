@@ -54,6 +54,12 @@ class ExtractTextRequest(BaseModel):
     text: str
     links: Optional[list[str]] = None
 
+class AnalyzeRequest(BaseModel):
+    resume_text: str
+    repo_url: str
+    candidate_name: Optional[str] = None
+    links: Optional[list[str]] = None
+
 @app.get("/api/health")
 def health_check():
     return {
@@ -80,6 +86,23 @@ async def extract_from_file(file: UploadFile = File(...)):
 @app.post("/api/harvest", response_model=EvidenceDocument)
 def harvest_evidence(req: HarvestRequest):
     return harvester.harvest_repo(req.repo_url, req.candidate_name)
+
+# --- Unified End-to-End Analysis Pipeline ---
+@app.post("/api/analyze", response_model=PassportDocument)
+def analyze_candidate(req: AnalyzeRequest):
+    # 1. Module 1: Extract claims and guard against prompt injection
+    links = [req.repo_url] if req.repo_url else []
+    if req.links:
+        links.extend(req.links)
+    claims_doc = extractor.extract_from_text(req.resume_text, links)
+    if req.candidate_name and req.candidate_name.strip():
+        claims_doc.candidate_name = req.candidate_name.strip()
+
+    # 2. Module 2: Code Evidence Harvester (real git blame, AST parsing, test detection)
+    evidence_doc = harvester.harvest_repo(req.repo_url, claims_doc.candidate_name)
+
+    # 3. Module 3: 4-State Rubric Engine & Cryptographic Signer
+    return passport_svc.generate_passport(claims_doc, evidence_doc)
 
 # --- Module 3: Rubric Verifier & Passport ---
 @app.post("/api/verify", response_model=PassportDocument)

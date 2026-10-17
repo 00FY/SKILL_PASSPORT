@@ -7,15 +7,19 @@ interface MetricsRowProps {
   authorshipPct?: number;
   refusalCount: number;
   activeMonths?: number;
+  isFork?: boolean;
+  totalCommits?: number;
   onSelectRefusals: () => void;
 }
 
 export const MetricsRow: React.FC<MetricsRowProps> = ({
   roleMatchPct,
   overallScore,
-  authorshipPct = 91.2,
+  authorshipPct = 0,
   refusalCount,
-  activeMonths = 14,
+  activeMonths = 1,
+  isFork = false,
+  totalCommits = 0,
   onSelectRefusals
 }) => {
   return (
@@ -42,20 +46,24 @@ export const MetricsRow: React.FC<MetricsRowProps> = ({
 
       {/* Metric 2: Ground-Truth Line Authorship */}
       <div className="bg-[#101112] border border-[#1B1C1E] rounded p-4 card-inner-glow relative overflow-hidden flex flex-col justify-between">
-        <div className="absolute top-4 right-4 w-2 h-2 rounded-full bg-[#50d8e9] beacon-cyan animate-beacon" />
+        <div className={`absolute top-4 right-4 w-2 h-2 rounded-full ${
+          isFork || authorshipPct < 20 ? 'bg-[#ffb4ab] beacon-error animate-beacon' : 'bg-[#50d8e9] beacon-cyan animate-beacon'
+        }`} />
         <div>
           <div className="text-[11px] font-mono uppercase tracking-widest text-[#9A9DA3] mb-1">
             Git Blame Authorship
           </div>
           <div className="font-heading font-extrabold text-3xl sm:text-4xl text-[#e5e2e3] tracking-tighter">
-            {authorshipPct ? authorshipPct.toFixed(1) : '91.2'}%
+            {authorshipPct ? authorshipPct.toFixed(1) : '0.0'}%
           </div>
         </div>
         <div className="flex items-center justify-between text-xs font-mono text-[#9A9DA3] mt-3 pt-2.5 border-t border-[#1B1C1E]">
-          <span className="text-[#bec2ff]">
-            {activeMonths} months sustained history
+          <span className={activeMonths > 2 ? 'text-[#bec2ff]' : 'text-[#ffb689]'}>
+            {activeMonths} month{activeMonths === 1 ? '' : 's'} {activeMonths > 2 ? 'sustained history' : 'commit span'}
           </span>
-          <span className="text-[#9A9DA3]">0 template forks</span>
+          <span className={isFork ? 'text-[#ffb4ab] font-bold' : 'text-[#9A9DA3]'}>
+            {isFork ? 'Fork template' : 'Original repo'}
+          </span>
         </div>
       </div>
 

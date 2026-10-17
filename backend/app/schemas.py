@@ -138,6 +138,11 @@ class PassportDocument(BaseModel):
     applied_role: str
     role_match_pct: int
     overall_score: int
+    candidate_authorship_pct: Optional[float] = 0.0
+    active_months: Optional[int] = 1
+    total_commits: Optional[int] = 0
+    repo_url: Optional[str] = None
+    is_fork: Optional[bool] = False
     skills: List[SkillPassportItem] = Field(default_factory=list)
     refusal_panel: List[RefusalItem] = Field(default_factory=list)
     learning_plan: List[LearningPlanItem] = Field(default_factory=list)

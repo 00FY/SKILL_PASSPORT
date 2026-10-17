@@ -57,6 +57,11 @@ export interface PassportDocument {
   applied_role: string;
   role_match_pct: number;
   overall_score: number;
+  candidate_authorship_pct?: number;
+  active_months?: number;
+  total_commits?: number;
+  repo_url?: string;
+  is_fork?: boolean;
   skills: SkillPassportItem[];
   refusal_panel: RefusalItem[];
   learning_plan: LearningPlanItem[];
@@ -82,6 +87,11 @@ export const MOCK_PRIYA: PassportDocument = {
   applied_role: "Backend Developer",
   role_match_pct: 72,
   overall_score: 62,
+  candidate_authorship_pct: 91.2,
+  active_months: 14,
+  total_commits: 42,
+  repo_url: "https://github.com/priya/api-service",
+  is_fork: false,
   tamper_proof_hash: "sha256:7f8a91c0e359bdc641f928e3a2b8e8f2a99182d30491823abce1283749281a8b",
   issued_at: "2026-10-17T12:00:00Z",
   skills: [
@@ -207,6 +217,11 @@ export const MOCK_ALEX: PassportDocument = {
   applied_role: "Lead Cloud Architect",
   role_match_pct: 18,
   overall_score: 14,
+  candidate_authorship_pct: 4.1,
+  active_months: 1,
+  total_commits: 2,
+  repo_url: "https://github.com/alex/cloud-starter",
+  is_fork: true,
   tamper_proof_hash: "sha256:4b912ecf0991823741829384729183749281726354819283746152439581726a",
   issued_at: "2026-10-17T12:05:00Z",
   skills: [
@@ -283,6 +298,11 @@ export const MOCK_JORDAN: PassportDocument = {
   applied_role: "Junior Backend Developer",
   role_match_pct: 54,
   overall_score: 48,
+  candidate_authorship_pct: 78.5,
+  active_months: 4,
+  total_commits: 14,
+  repo_url: "https://github.com/jordan/task-manager",
+  is_fork: false,
   tamper_proof_hash: "sha256:918237498172938471928374619283746192837461928374619283746192837a",
   issued_at: "2026-10-17T12:10:00Z",
   skills: [
@@ -378,6 +398,11 @@ export const MOCK_REDTEAM: PassportDocument = {
   applied_role: "Security Researcher",
   role_match_pct: 12,
   overall_score: 10,
+  candidate_authorship_pct: 12.0,
+  active_months: 1,
+  total_commits: 3,
+  repo_url: "https://github.com/redteam/poc",
+  is_fork: false,
   tamper_proof_hash: "sha256:c0a8172b09918273645192837465918273645192837461928374619283746192",
   issued_at: "2026-10-17T12:15:00Z",
   skills: [

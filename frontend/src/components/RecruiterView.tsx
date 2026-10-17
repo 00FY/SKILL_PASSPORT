@@ -89,9 +89,11 @@ export const RecruiterView: React.FC<RecruiterViewProps> = ({
       <MetricsRow
         roleMatchPct={role_match_pct}
         overallScore={overall_score}
-        authorshipPct={skills[0]?.authorship_pct || 91.2}
+        authorshipPct={passport.candidate_authorship_pct ?? skills[0]?.authorship_pct ?? 0}
         refusalCount={refusal_panel.length}
-        activeMonths={14}
+        activeMonths={passport.active_months ?? 12}
+        totalCommits={passport.total_commits}
+        isFork={passport.is_fork}
         onSelectRefusals={onSelectRefusalsTab}
       />
 
@@ -101,8 +103,8 @@ export const RecruiterView: React.FC<RecruiterViewProps> = ({
         <div className="lg:col-span-2 space-y-6">
           {/* Live Telemetry Graph */}
           <TelemetryGraph
-            authorshipPct={skills[0]?.authorship_pct || 91.2}
-            activeMonths={14}
+            authorshipPct={passport.candidate_authorship_pct ?? skills[0]?.authorship_pct ?? 0}
+            activeMonths={passport.active_months ?? 12}
             hasTests={skills.some(s => s.signals.some(sig => sig.toLowerCase().includes('pytest') || sig.toLowerCase().includes('test')))}
             timeframe={selectedTimeframe}
           />

@@ -33,50 +33,25 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     setStepMessage("Sanitizing text & checking for prompt injection...");
 
     try {
-      setStepMessage("Module 1: Extracting structured claims.json...");
-      const extractRes = await fetch('/api/extract/text', {
+      setStepMessage("Executing 4-Module Pipeline: Prompt Defense -> Claim Extraction -> Git Blame -> Rubric Signer...");
+      const analyzeRes = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: resumeText,
-          links: [githubUrl]
+          candidate_name: candidateName,
+          resume_text: resumeText,
+          repo_url: githubUrl
         })
       });
 
-      const claimsDoc = extractRes.ok ? await extractRes.json() : null;
-
-      setStepMessage("Module 2: Harvesting Git blame authorship & AST test files...");
-      const harvestRes = await fetch('/api/harvest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repo_url: githubUrl,
-          candidate_name: candidateName
-        })
-      });
-
-      const evidenceDoc = harvestRes.ok ? await harvestRes.json() : null;
-
-      if (claimsDoc && evidenceDoc) {
-        setStepMessage("Module 3: Evaluating 4-state rubric & cryptographically signing passport...");
-        const verifyRes = await fetch('/api/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            claims: claimsDoc,
-            evidence: evidenceDoc,
-            challenge_grades: { Python: "A", FastAPI: "B" }
-          })
-        });
-
-        if (verifyRes.ok) {
-          const passport = await verifyRes.json();
-          onCustomVerified(passport);
-          onClose();
-          return;
-        }
+      if (analyzeRes.ok) {
+        const passport = await analyzeRes.json();
+        onCustomVerified(passport);
+        onClose();
+        return;
       }
 
+      // Fallback to demo persona if local Git repo unavailable
       const demoRes = await fetch('/api/demo/priya');
       if (demoRes.ok) {
         const passport = await demoRes.json();
