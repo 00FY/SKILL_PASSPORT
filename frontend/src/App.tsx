@@ -1,271 +1,78 @@
-import React, { useState, useEffect } from 'react';
-import { Sidebar } from './components/Sidebar';
-import { Header } from './components/Header';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
+import { TopBar, View } from './components/TopBar';
 import { RecruiterView } from './components/RecruiterView';
-import { StudentView } from './components/StudentView';
+import { CandidateView } from './components/CandidateView';
 import { EvidenceDrawer } from './components/EvidenceDrawer';
 import { QuizModal } from './components/QuizModal';
-import { SecurityAlertModal } from './components/SecurityAlertModal';
 import { UploadModal } from './components/UploadModal';
-import { TamperVerifyModal } from './components/TamperVerifyModal';
-import {
-  MOCK_PRIYA, MOCK_ALEX, MOCK_JORDAN, MOCK_REDTEAM,
-  PassportDocument, SkillPassportItem
-} from './data/mockData';
-import { ShieldCheck, Lock, Activity, AlertTriangle } from 'lucide-react';
+import { PytestGeneratorModal } from './components/PytestGeneratorModal';
+import { PassportDocument, SkillPassportItem } from './lib/types';
+import { request } from './lib/api';
 
 export const App: React.FC = () => {
-  const [currentPersonaKey, setCurrentPersonaKey] = useState<string>('priya');
-  const [passport, setPassport] = useState<PassportDocument>(MOCK_PRIYA);
-  const [activeView, setActiveView] = useState<'recruiter' | 'student'>('recruiter');
-  const [activeTab, setActiveTab] = useState<'overview' | 'telemetry' | 'refusals' | 'simulator'>('overview');
-  const [selectedTimeframe, setSelectedTimeframe] = useState<string>('ALL');
+  const [passport, setPassport] = useState<PassportDocument | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [demoKey, setDemoKey] = useState('priya');
+  const [view, setView] = useState<View>('recruiter');
 
-  // Modals
   const [selectedSkill, setSelectedSkill] = useState<SkillPassportItem | null>(null);
-  const [quizSkillName, setQuizSkillName] = useState<string | null>(null);
-  const [isSecurityModalOpen, setIsSecurityModalOpen] = useState<boolean>(false);
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
-  const [isTamperModalOpen, setIsTamperModalOpen] = useState<boolean>(false);
-  const [signatureVerifiedNotice, setSignatureVerifiedNotice] = useState<boolean>(false);
+  const [quizSkill, setQuizSkill] = useState<string | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [pytestOpen, setPytestOpen] = useState(false);
 
-  // Load persona from API with fallback
-  const handleSelectPersona = async (key: string) => {
-    setCurrentPersonaKey(key);
-
+  const loadDemo = async (key: string) => {
+    setDemoKey(key);
+    setLoadError('');
+    setPassport(null);
     try {
-      const res = await fetch(`/api/demo/${key}`);
-      if (res.ok) {
-        const data = await res.json();
-        setPassport(data);
-        if (key === 'redteam') {
-          setIsSecurityModalOpen(true);
-        }
-        return;
-      }
-    } catch {
-      // Fallback
-    }
-
-    if (key === 'priya') setPassport(MOCK_PRIYA);
-    else if (key === 'alex') setPassport(MOCK_ALEX);
-    else if (key === 'jordan') setPassport(MOCK_JORDAN);
-    else if (key === 'redteam') {
-      setPassport(MOCK_REDTEAM);
-      setIsSecurityModalOpen(true);
+      setPassport(await request<PassportDocument>(`/api/demo/${key}`));
+    } catch (e) {
+      setLoadError((e as Error).message);
     }
   };
 
-  const handleSimulateScore = async (toggles: Record<string, boolean>) => {
-    try {
-      const res = await fetch('/api/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          base_passport: passport,
-          toggles
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        return {
-          newRoleMatch: data.new_role_match_pct,
-          newOverall: data.new_score
-        };
-      }
-    } catch {
-      // Offline fallback
-    }
-
-    let boost = 0;
-    if (toggles.add_pytest) boost += 9;
-    if (toggles.add_deploy) boost += 8;
-    if (toggles.sustained_commits) boost += 7;
-
-    return {
-      newRoleMatch: Math.min(98, passport.role_match_pct + boost),
-      newOverall: Math.min(100, passport.overall_score + Math.round(boost * 0.7))
-    };
-  };
-
-  const handleCustomVerified = (customPassport: PassportDocument) => {
-    setCurrentPersonaKey('custom');
-    setPassport(customPassport);
-    if (customPassport.security_alerts && customPassport.security_alerts.length > 0) {
-      setIsSecurityModalOpen(true);
-    }
-  };
-
-  const handleCompleteQuiz = (skillName: string, grade: string, points: number) => {
-    setPassport(prev => {
-      const updatedSkills = prev.skills.map(s => {
-        if (s.name.toLowerCase() === skillName.toLowerCase()) {
-          return {
-            ...s,
-            test_grade: grade,
-            final_points: points,
-            signals: [...s.signals, `Challenge test passed with grade ${grade}`]
-          };
-        }
-        return s;
-      });
-
-      const totalPts = updatedSkills.reduce((acc, s) => acc + s.final_points, 0);
-      const newOverall = Math.round(totalPts / Math.max(1, updatedSkills.length));
-
-      return {
-        ...prev,
-        overall_score: newOverall,
-        skills: updatedSkills
-      };
-    });
-  };
-
-  const [signatureNoticeDetails, setSignatureNoticeDetails] = useState<{ valid: boolean; reason: string } | null>(null);
-
-  const handleVerifySignature = async () => {
-    setIsTamperModalOpen(true);
-  };
-
-  const handleSelectRefusalsTab = () => {
-    setActiveTab('refusals');
-    const el = document.getElementById('refusals-section');
-    if (el) el.scrollIntoView({ behavior: 'smooth' });
-  };
+  useEffect(() => { loadDemo('priya'); }, []);
 
   return (
-    <div className="min-h-screen bg-[#131314] text-[#e5e2e3] flex flex-row font-sans selection:bg-[#5E6BFF] selection:text-white">
-      {/* Romer Left Sidebar Dock */}
-      <Sidebar
-        currentPersona={currentPersonaKey}
-        onSelectPersona={handleSelectPersona}
-        activeView={activeView}
-        onSelectView={setActiveView}
-        onOpenUpload={() => setIsUploadModalOpen(true)}
-        onOpenSecurityModal={() => setIsSecurityModalOpen(true)}
-        hasSecurityAlerts={passport.security_alerts && passport.security_alerts.length > 0}
-        activeTab={activeTab}
-        onSelectTab={setActiveTab}
+    <div className="min-h-screen bg-[#121314] text-zinc-100">
+      <TopBar
+        view={view}
+        onChangeView={setView}
+        demoKey={demoKey}
+        onSelectDemo={loadDemo}
+        onAnalyze={() => setUploadOpen(true)}
       />
 
-      {/* Main Command View Area */}
-      <div className="flex-1 md:ml-64 flex flex-col min-h-screen overflow-x-hidden">
-        {/* Top Header */}
-        <Header
-          candidateName={passport.candidate_name}
-          appliedRole={passport.applied_role}
-          tamperProofHash={passport.tamper_proof_hash}
-          onVerifySignature={handleVerifySignature}
-          selectedTimeframe={selectedTimeframe}
-          onSelectTimeframe={setSelectedTimeframe}
-          activeView={activeView}
-        />
-
-        {/* Cryptographic Toast Notice */}
-        {signatureVerifiedNotice && (
-          <div className="fixed top-16 right-6 z-50 p-3.5 rounded bg-[#101112] border border-[#50d8e9]/40 shadow-2xl flex items-center gap-3 animate-fadeIn text-xs font-mono max-w-md">
-            <div className={`w-8 h-8 rounded flex items-center justify-center shrink-0 ${signatureNoticeDetails?.valid !== false ? 'bg-[#50d8e9]/10 text-[#50d8e9]' : 'bg-[#ffb4ab]/10 text-[#ffb4ab]'}`}>
-              <ShieldCheck className="w-4 h-4" />
-            </div>
-            <div>
-              <p className="font-bold text-[#e5e2e3] flex items-center gap-2">
-                <span>{signatureNoticeDetails?.valid !== false ? 'Cryptographic HMAC Seal Verified' : 'Cryptographic Signature Mismatch'}</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#50d8e9]/10 text-[#50d8e9] border border-[#50d8e9]/20 uppercase">
-                  SHA-256 HMAC
-                </span>
-              </p>
-              <p className="text-[#9A9DA3] text-[10px] mt-0.5">{signatureNoticeDetails?.reason || 'Verified against canonical JSON.'}</p>
-              <p className="text-[#50d8e9] text-[9px] truncate mt-1">{passport.tamper_proof_hash}</p>
-            </div>
+      <main className="mx-auto max-w-5xl px-4 py-6">
+        {loadError && (
+          <div className="flex items-center gap-3 rounded-lg border border-red-400/40 bg-red-500/10 p-4 text-sm text-red-200">
+            <AlertTriangle className="h-4 w-4 shrink-0" />{loadError}
           </div>
         )}
+        {!passport && !loadError && <Loader2 className="mx-auto mt-16 h-6 w-6 animate-spin text-zinc-500" />}
+        {passport && (view === 'recruiter'
+          ? <RecruiterView passport={passport} onOpenSkill={setSelectedSkill} />
+          : <CandidateView passport={passport} onOpenPytest={() => setPytestOpen(true)} />)}
+      </main>
 
-        {/* Content Body */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
-          {passport.warnings && passport.warnings.length > 0 && (
-            <div className="p-3.5 rounded bg-[#1d1a14] border border-[#ffb689]/30 flex items-start gap-3 text-xs font-mono text-[#ffb689]">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                {passport.warnings.map((w, i) => <p key={i}>{w}</p>)}
-              </div>
-            </div>
-          )}
-          {activeView === 'recruiter' ? (
-            <RecruiterView
-              passport={passport}
-              onSelectSkill={setSelectedSkill}
-              onVerifySignature={handleVerifySignature}
-              selectedTimeframe={selectedTimeframe}
-              onSelectRefusalsTab={handleSelectRefusalsTab}
-              activeTab={activeTab}
-              onSelectTab={setActiveTab}
-            />
-          ) : (
-            <StudentView
-              passport={passport}
-              onSimulateScore={handleSimulateScore}
-            />
-          )}
-        </main>
+      <footer className="pb-8 text-center text-xs text-zinc-500">
+        Skills are scored from the candidate's code by fixed rules. An AI model only reads the resume text.
+      </footer>
 
-        {/* Romer Terminal Footer */}
-        <footer className="border-t border-[#1B1C1E] bg-[#0e0e0f] py-3 px-6 text-xs font-mono text-[#9A9DA3] flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Lock className="w-3.5 h-3.5 text-[#50d8e9]" />
-            <span>THE GOLDEN RULE: <strong className="text-[#e5e2e3]">"LLM extracts text, published rules score evidence."</strong></span>
-          </div>
-          <div className="flex items-center gap-3 text-[10px] text-[#454655]">
-            <span>ENGINE: DETERMINISTIC 4-STATE</span>
-            <span>•</span>
-            <span>BLAME: GIT AUTHORSHIP %</span>
-            <span>•</span>
-            <span>CRYPTO: SHA-256</span>
-          </div>
-        </footer>
-      </div>
-
-      {/* Slide-over Evidence Drawer */}
       <EvidenceDrawer
         skill={selectedSkill}
-        candidateName={passport.candidate_name}
-        auditLog={passport.audit_log}
-        isOpen={!!selectedSkill}
+        auditLog={passport?.audit_log}
         onClose={() => setSelectedSkill(null)}
-        onOpenQuiz={(skillName) => {
-          setSelectedSkill(null);
-          setQuizSkillName(skillName);
-        }}
+        onOpenQuiz={name => { setSelectedSkill(null); setQuizSkill(name); }}
       />
-
-      {/* 15-Question Challenge Test Modal */}
-      <QuizModal
-        skillName={quizSkillName || 'Python'}
-        isOpen={!!quizSkillName}
-        onClose={() => setQuizSkillName(null)}
-        onCompleteQuiz={handleCompleteQuiz}
-      />
-
-      {/* Prompt Injection Security Defense Modal */}
-      <SecurityAlertModal
-        alerts={passport.security_alerts || []}
-        isOpen={isSecurityModalOpen}
-        onClose={() => setIsSecurityModalOpen(false)}
-      />
-
-      {/* Custom Upload & GitHub Analyzer Modal */}
+      <QuizModal skillName={quizSkill} onClose={() => setQuizSkill(null)} />
       <UploadModal
-        isOpen={isUploadModalOpen}
-        onClose={() => setIsUploadModalOpen(false)}
-        onCustomVerified={handleCustomVerified}
+        isOpen={uploadOpen}
+        onClose={() => setUploadOpen(false)}
+        onCustomVerified={p => { setPassport(p); setDemoKey('custom'); setView('recruiter'); }}
       />
-
-      {/* Cryptographic Tamper & Verify Modal */}
-      <TamperVerifyModal
-        isOpen={isTamperModalOpen}
-        onClose={() => setIsTamperModalOpen(false)}
-        passport={passport}
-      />
+      <PytestGeneratorModal isOpen={pytestOpen} onClose={() => setPytestOpen(false)} />
     </div>
   );
 };

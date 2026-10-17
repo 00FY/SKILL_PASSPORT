@@ -65,9 +65,9 @@ flowchart TD
 
     K --> L & M
 
-    subgraph M4 ["Module 4: Dual-Perspective Portal"]
-        L["📊 Recruiter Executive Dashboard<br/>• Audit Score & Dynamic Role Match %<br/>• Interactive Code Evidence Drawer<br/>• Live Signature Tamper Verifier"]:::mod4
-        M["🚀 Candidate Growth Portal<br/>• Transparent Refusal Feedback<br/>• Live 'What-If' Score Simulator<br/>• 1-Click Pytest Starter Generator"]:::mod4
+    subgraph M4 ["Module 4: Web App"]
+        L["📊 Recruiter view<br/>• Verdict per claim, in plain language<br/>• Code evidence for each skill<br/>• Live signature check"]:::mod4
+        M["🚀 Candidate view<br/>• Next steps with computed impact<br/>• What-if simulator<br/>• Starter pytest file"]:::mod4
     end
 ```
 
@@ -128,13 +128,13 @@ Learning-plan impacts and the What-If simulator re-run this exact formula with t
 
 ## 🎭 The 4 Demo Personas (Live Walkthrough)
 
-The sidebar's **Audit Profiles** load pre-built evidence documents from `backend/app/data/demo_personas.py`. They are scored by the same engine as real candidates, and the numbers below are what the engine produces:
+The **Demo** menu in the top bar loads pre-built evidence documents from `backend/app/data/demo_personas.py`. They are scored by the same engine as real candidates, and the numbers below are what the engine produces:
 
 | Persona | Archetype | Score / Role Match | What the engine does |
 | :--- | :--- | :---: | :--- |
 | **Priya S.** | The Honest Engineer | **68 / 71%** *(91.2% authorship)* | Python and FastAPI are VERIFIED (14 months, deployment signal) and Docker is PARTIAL (certificate). "Led a 5-person team" is CONTRADICTED because every linked repo has one contributor. The pytest claim links `shop-api`, which wasn't analysed, so it is CLAIMED_ONLY. |
 | **Alex R.** | The Fork Cloner | **10 / 10%** *(4.1% authorship)* | A fork with 4.1% authorship and a 3-day commit dump: every claim is CONTRADICTED or refused. |
-| **Jordan K.** | The Early Learner | **40 / 70%** *(78.5% authorship)* | Python is VERIFIED, Docker is PARTIAL and there are no tests. Toggling *Add pytest suite* in the What-If simulator recomputes the role match to **85%**. |
+| **Jordan K.** | The Early Learner | **40 / 70%** *(78.5% authorship)* | Python is VERIFIED, Docker is PARTIAL and there are no tests. Selecting *Add tests* in the candidate view's what-if section recomputes the role match to **85%**. |
 | **Red Team** | The Adversarial Cheater | **Security alert** | Hidden zero-width Unicode and an injection payload are intercepted by Module 1 and shown in the Security Alert modal. |
 
 ---
@@ -148,15 +148,20 @@ The sidebar's **Audit Profiles** load pre-built evidence documents from `backend
 * **Up to 5 repositories per candidate**, merged into one evidence document. If none are entered, repository links in the resume are used.
 * **Honest failures:** a typo, a private repo or a network error returns a clear error. The tool never substitutes demo data.
 
-### 🔍 For Recruiters: The Executive Command Dashboard
-* **Interactive Evidence Drawer:** click any skill to see the file, line range and code snippet that proved it, along with the candidate's authorship share.
-* **The Refusal Queue:** every rejected claim with its exact forensic reason.
-* **Cryptographic Tamper Verifier (`HMAC-SHA256`):** altering any field of a passport invalidates its signature.
+### 🔍 Recruiter view
+One screen answering "can I trust this resume?":
+* **Summary:** "N of M claims verified by code", plus the audit score, role match and the share of code the candidate wrote. Each comes with a one-line explanation.
+* **Signature check:** the backend re-verifies the passport's HMAC signature every time it's shown.
+* **Claims list:** each skill gets a plain-language verdict (*Verified by code*, *Partly supported*, *No evidence*, *Contradicted*) and the reason. Clicking a skill shows the code the candidate wrote, how the points were calculated, and the rules that were applied.
+* **Problems found:** contradictions such as fake team sizes, forks, commit dumps and inflated durations, each with how to fix it.
+* **Warnings & security alerts:** identity mismatches, unreachable repositories and hidden prompt-injection text are shown at the top.
+* **Audit details** (collapsed): repositories, commit counts, the formulas, the full rule trace, and a download of the signed passport JSON, which anyone can verify with `POST /api/verify-signature`.
 
-### 🌱 For Candidates & Students: The Growth Portal
-* **What-If Score Simulator:** each toggle's impact is computed by the backend with the same formulas used to issue the passport.
-* **1-Click Starter Test Generator** for unverified routes.
-* **Built-In Skill Challenges:** a 15-question bank (Python, Docker) that grades skills locked in private repositories.
+### 🌱 Candidate view
+* **Next steps:** the learning plan, with each step's impact computed by re-running the scoring formulas.
+* **What if…:** toggle improvements (tests, deployment, sustained commits) and see their combined effect. The backend calculates it.
+* **Starter pytest file:** a generic FastAPI test file to adapt.
+* **Skill challenges:** a 15-question quiz (Python, Docker) that can be opened from a skill that isn't verified. The grade is shown only and isn't added to the signed passport.
 
 ---
 
@@ -187,13 +192,13 @@ export SKILL_PASSPORT_HMAC_SECRET="$(python -c 'import secrets; print(secrets.to
 PYTHONPATH=backend uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-**Start the React Executive Dashboard (in another terminal):**
+**Start the web app (in another terminal):**
 ```bash
 cd frontend
 npm install
 npm run dev -- --host 127.0.0.1 --port 3000
 ```
-Open [http://localhost:3000](http://localhost:3000), then click **Launch Audit Terminal** to audit a real resume against public repositories.
+Open [http://localhost:3000](http://localhost:3000), then click **Analyze a resume** to audit a real resume against public repositories.
 
 ### 4. Configuration
 
@@ -208,8 +213,26 @@ Open [http://localhost:3000](http://localhost:3000), then click **Launch Audit T
 | `SKILL_PASSPORT_ALLOW_LOCAL_REPOS` | `0` | Allow local filesystem paths as repositories (development only). |
 | `SKILL_PASSPORT_CLONE_TIMEOUT_S` / `SKILL_PASSPORT_MAX_REPO_MB` | 120 / 500 | Clone time and size limits. |
 | `SKILL_PASSPORT_BLAME_BUDGET_S` / `SKILL_PASSPORT_MAX_BLAME_FILES` | 120 / 1500 | Blame time budget and file cap per repository (results note when they're truncated). |
+| `SKILL_PASSPORT_RATE_LIMIT` | `20/hour` | Analyses allowed per client address (`N/second\|minute\|hour\|day`, or `0` to disable). |
+| `SKILL_PASSPORT_TRUST_PROXY` | `0` | Set to `1` behind your own reverse proxy so limits use `X-Forwarded-For`. |
+| `SKILL_PASSPORT_API_KEY` | unset | If set, analysis endpoints require a matching `X-API-Key` header. For private deployments: a key built into the frontend (`VITE_SKILL_PASSPORT_API_KEY`) is visible to anyone who loads it. |
+| `SKILL_PASSPORT_WORKERS` / `SKILL_PASSPORT_MAX_PENDING_JOBS` | 2 / 20 | Concurrent background analyses, and how many may be queued before new ones get "server busy". |
 
-### 5. Run the Test Suite
+### 5. API overview
+
+| Endpoint | Purpose |
+| :--- | :--- |
+| `POST /api/parse-resume` | Upload a PDF / DOCX / TXT resume and get its text and repository links back. |
+| `POST /api/jobs/analyze` → `GET /api/jobs/{id}` | Start an analysis in the background and poll for its progress and the signed passport. This is what the web app uses. |
+| `POST /api/analyze` | The same analysis in a single request, for scripts (can take minutes). |
+| `POST /api/verify-signature` | Check that a passport JSON hasn't been altered. |
+| `POST /api/simulate` | What-if recalculation (not signed). |
+| `GET /api/quiz/{skill}`, `POST /api/quiz/submit` | Skill challenges. Answers are revealed only after submission. |
+| `GET /api/demo/{priya\|alex\|jordan\|redteam}` | Demo passports, signed with `evidence_source: "demo"`. |
+
+Analysis endpoints are rate-limited per client and optionally protected by an API key (see Configuration).
+
+### 6. Run the Test Suite
 ```bash
 PYTHONPATH=backend pytest tests backend/tests -v
 ```
@@ -222,9 +245,14 @@ PYTHONPATH=backend pytest tests backend/tests -v
 2. **Restricted repository fetching:** only `https` URLs on allow-listed code hosts are accepted (no credentials, ports, internal hosts or `file://`), with clone time and size limits. Local paths are refused unless explicitly enabled.
 3. **Steganography & Prompt Injection Defense:** Module 1 strips zero-width characters, folds look-alike Unicode (NFKC), flags hidden styling only inside real style declarations (so "white text" in prose isn't an alert), decodes Base64 payloads, and neutralises paraphrased override phrases before any LLM sees the text.
 4. **Cryptographic Non-Repudiation:** passports carry an `HMAC-SHA256` signature over the canonicalised JSON. Unkeyed digests are rejected, and the key comes from the environment, never from source code.
+5. **The server only signs evidence it collected:** no endpoint scores evidence supplied by the caller, so a valid signature means the evidence came from this server's own analysis. Demo passports are signed with `evidence_source: "demo"`, so they can't pass as real audits.
+6. **Abuse limits:** per-client rate limits, a capped job queue, an optional API key, and a free-disk-space check before every clone.
 
 ## ⚠️ Known Limitations
 * Only public repositories can be analysed; private work can be graded through the Skill Challenge quiz.
 * The quiz bank currently covers Python and Docker only.
 * A repository's homepage or deployments count as a deployment signal; liveness isn't checked.
+* Background jobs and rate-limit counters live in memory: they reset on restart and aren't shared between server processes. Use one process, or put the limits in your reverse proxy.
+* Quiz grades are shown to the candidate but aren't added to the signed passport.
+* Only the 100 most recent closed pull requests are checked for merged PRs.
 * Very large repositories are analysed within the blame time budget, so authorship may be measured on a subset of files (flagged in the passport warnings).

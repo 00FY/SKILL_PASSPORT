@@ -370,3 +370,138 @@ def test_quiz_never_falls_back_to_another_skill():
     assert client.get("/api/quiz/Java").status_code == 404
     assert client.post("/api/quiz/submit", json={"skill": "Java", "answers": {}}).status_code == 404
     assert len(client.get("/api/quiz/python").json()["questions"]) == 15
+
+
+def test_signature_survives_javascript_number_formatting():
+    """Browsers serialise 12.0 as 12; a passport must still verify after a round-trip through JS."""
+    passport = client.get("/api/demo/redteam").json()
+    assert passport["candidate_authorship_pct"] == 12.0
+    js_style = json.loads(json.dumps(passport), parse_float=lambda s: int(float(s)) if float(s).is_integer() else float(s))
+    assert isinstance(js_style["candidate_authorship_pct"], int)
+    assert client.post("/api/verify-signature", json=js_style).json()["valid"] is True
+    js_style["candidate_authorship_pct"] = 13
+    assert client.post("/api/verify-signature", json=js_style).json()["valid"] is False
+
+
+# --- Integrity: what the server will and won't sign --------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_rate_limit(monkeypatch):
+    """Tests share one client address; give each test a fresh, unlimited limiter."""
+    import app.main as main_module
+    from app.limits import RateLimiter
+    monkeypatch.setattr(main_module, "analysis_limiter", RateLimiter(0, 1))
+
+
+def test_no_endpoint_signs_caller_supplied_evidence():
+    fake = {"claims": {"candidate_name": "Mallory", "applied_role": "Staff", "claims": [{"id": "1", "skill": "Rust"}]},
+            "evidence": {"repo_url": "https://github.com/x/y", "candidate_authorship_pct": 100}}
+    assert client.post("/api/verify", json=fake).status_code in (404, 405)
+
+
+def test_demo_passports_are_labelled_and_label_is_signed():
+    demo = client.get("/api/demo/priya").json()
+    assert demo["evidence_source"] == "demo"
+    demo["evidence_source"] = "harvested"
+    assert client.post("/api/verify-signature", json=demo).json()["valid"] is False
+
+
+def test_quiz_review_only_after_submission():
+    questions = client.get("/api/quiz/Docker").json()["questions"]
+    assert questions and all(set(q) == {"id", "skill", "difficulty", "question", "options"} for q in questions)
+    result = client.post("/api/quiz/submit", json={"skill": "Docker", "answers": {questions[0]["id"]: 0}}).json()
+    review = {r["id"]: r for r in result["review"]}
+    assert review[questions[0]["id"]]["chosen_index"] == 0
+    assert all("correct_index" in r for r in result["review"])
+
+
+# --- Background jobs ---------------------------------------------------------------------------
+
+def _wait_for(job_id, timeout=60):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        body = client.get(f"/api/jobs/{job_id}").json()
+        if body["status"] in ("done", "failed"):
+            return body
+        time.sleep(0.2)
+    raise AssertionError("job did not finish")
+
+
+def test_analysis_job_runs_in_background(monkeypatch, username_repo):
+    monkeypatch.setenv("SKILL_PASSPORT_ALLOW_LOCAL_REPOS", "1")
+    res = client.post("/api/jobs/analyze", json={
+        "resume_text": "Soham Kadam\nBackend Developer\nPython for 2 years",
+        "repo_urls": [username_repo], "git_identities": ["sohamk234"]})
+    assert res.status_code == 202
+    body = _wait_for(res.json()["job_id"])
+    assert body["status"] == "done", body
+    passport = body["passport"]
+    assert passport["evidence_source"] == "harvested"
+    assert next(s for s in passport["skills"] if s["name"] == "Python")["verdict"] == "VERIFIED"
+    assert client.post("/api/verify-signature", json=passport).json()["valid"] is True
+
+
+def test_analysis_job_reports_failure(monkeypatch):
+    def fail(ref, dest):
+        raise RepoAccessError(f"Could not clone {ref.url}: the repository doesn't exist or is private.")
+    monkeypatch.setattr(harvester_module, "clone_repo", fail)
+    res = client.post("/api/jobs/analyze", json={"resume_text": "Python", "repo_urls": ["https://github.com/a/missing"]})
+    body = _wait_for(res.json()["job_id"])
+    assert body["status"] == "failed" and body["error_status"] == 422 and "private" in body["error"]
+
+
+def test_analysis_job_rejects_bad_urls_immediately():
+    res = client.post("/api/jobs/analyze", json={"resume_text": "Python", "repo_urls": ["file:///etc/passwd"]})
+    assert res.status_code == 400
+    assert client.get("/api/jobs/does-not-exist").status_code == 404
+
+
+def test_job_queue_has_a_cap():
+    import threading
+    from app.jobs import JobManager, QueueFullError
+    release = threading.Event()
+    manager = JobManager(workers=1, max_pending=1)
+    manager.submit(lambda progress: release.wait(5) and {})
+    with pytest.raises(QueueFullError):
+        manager.submit(lambda progress: {})
+    release.set()
+
+
+# --- Abuse protection --------------------------------------------------------------------------
+
+def test_rate_limit_blocks_repeated_analyses(monkeypatch):
+    import app.main as main_module
+    from app.limits import RateLimiter
+    monkeypatch.setattr(main_module, "analysis_limiter", RateLimiter(2, 3600))
+    body = {"resume_text": "Python", "repo_urls": ["file:///nope"]}
+    assert client.post("/api/jobs/analyze", json=body).status_code == 400
+    assert client.post("/api/jobs/analyze", json=body).status_code == 400
+    res = client.post("/api/jobs/analyze", json=body)
+    assert res.status_code == 429
+    assert int(res.headers["retry-after"]) > 0 and "Try again" in res.json()["detail"]
+
+
+def test_optional_api_key(monkeypatch):
+    monkeypatch.setenv("SKILL_PASSPORT_API_KEY", "s3cret")
+    body = {"resume_text": "Python", "repo_urls": ["file:///nope"]}
+    assert client.post("/api/jobs/analyze", json=body).status_code == 401
+    assert client.post("/api/jobs/analyze", json=body, headers={"X-API-Key": "wrong"}).status_code == 401
+    assert client.post("/api/jobs/analyze", json=body, headers={"X-API-Key": "s3cret"}).status_code == 400
+    assert client.get("/api/demo/priya").status_code == 200  # cheap endpoints stay open
+
+
+def test_github_rate_limit_becomes_a_warning(username_repo):
+    from app.module2_harvester.github_api import RATE_LIMITED
+    from app.module2_harvester.repo_source import RepoRef
+
+    class RateLimitedGitHub(GitHubClient):
+        def _get(self, path, params=None, problems=None):
+            if problems is not None:
+                problems.append(RATE_LIMITED)
+            return None
+
+    svc = EvidenceHarvesterService(github_client=RateLimitedGitHub(enabled=True))
+    ref = RepoRef(url="https://github.com/sohamk234/demo", host="github.com", owner="sohamk234", name="demo")
+    doc = svc._analyze_path(username_repo, ref, "Soham Kadam", ["sohamk234"])
+    assert any("rate limit" in w and "GITHUB_TOKEN" in w for w in doc.warnings)

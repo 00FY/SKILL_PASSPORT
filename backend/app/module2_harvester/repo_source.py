@@ -97,6 +97,9 @@ def parse_repo_source(source: str, allow_local: bool = False) -> RepoRef:
 def clone_repo(ref: RepoRef, dest: str) -> None:
     timeout = int(os.getenv("SKILL_PASSPORT_CLONE_TIMEOUT_S", "120"))
     max_mb = int(os.getenv("SKILL_PASSPORT_MAX_REPO_MB", "500"))
+    free_mb = shutil.disk_usage(os.path.dirname(os.path.abspath(dest))).free / (1024 * 1024)
+    if free_mb < max_mb * 2:
+        raise RepoAccessError("The server is low on disk space right now. Please try again later.")
     env = {
         **os.environ,
         "GIT_TERMINAL_PROMPT": "0",   # never block on a credential prompt for private repos

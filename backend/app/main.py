@@ -1,6 +1,6 @@
 import os
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -8,9 +8,12 @@ from .schemas import (
     ClaimsDocument, EvidenceDocument, PassportDocument,
     SimulationRequest, SimulationResult, QuizResult, QuizSubmission
 )
+from .jobs import JobManager, JobFailure, QueueFullError
+from .limits import RateLimiter, enforce, require_api_key
 from .module1_extractor import LLMClaimExtractor, PDFParser
 from .module1_extractor.pdf_parser import ResumeParseError
 from .module2_harvester import EvidenceHarvesterService, RepoSourceError, RepoAccessError, parse_repo_source
+from .module2_harvester.repo_source import local_repos_allowed
 from .module2_harvester.harvester_service import MAX_REPOS
 from .module3_rubric import (
     PassportService, QuestionBankEngine, CryptoSigner
@@ -39,7 +42,7 @@ app.add_middleware(
     allow_origins=CORS_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 extractor = LLMClaimExtractor()
@@ -47,12 +50,14 @@ pdf_parser = PDFParser()
 harvester = EvidenceHarvesterService()
 passport_svc = PassportService()
 quiz_engine = QuestionBankEngine()
+jobs = JobManager()
+# Each analysis clones and blames repositories, so they are limited per client address
+analysis_limiter = RateLimiter.from_env("SKILL_PASSPORT_RATE_LIMIT", "20/hour")
 
 
-class VerifyRequest(BaseModel):
-    claims: ClaimsDocument
-    evidence: EvidenceDocument
-    challenge_grades: Optional[Dict[str, str]] = None
+def limit_analysis(request: Request) -> None:
+    require_api_key(request)
+    enforce(analysis_limiter, request)
 
 
 class HarvestRequest(BaseModel):
@@ -138,7 +143,7 @@ async def parse_resume(file: UploadFile = File(...)):
 
 
 # --- Module 2: Code Evidence Harvester ---
-@app.post("/api/harvest", response_model=EvidenceDocument)
+@app.post("/api/harvest", response_model=EvidenceDocument, dependencies=[Depends(limit_analysis)])
 def harvest_evidence(req: HarvestRequest):
     try:
         return harvester.harvest_repo(req.repo_url, req.candidate_name, req.git_identities)
@@ -149,12 +154,13 @@ def harvest_evidence(req: HarvestRequest):
 
 
 # --- Unified End-to-End Analysis Pipeline ---
-@app.post("/api/analyze", response_model=PassportDocument)
-def analyze_candidate(req: AnalyzeRequest):
+def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
+    report = progress or (lambda _msg: None)
     repos = [u for u in ([req.repo_url] if req.repo_url else []) + req.repo_urls if u and u.strip()]
     links = list(repos) + list(req.links or [])
 
     # 1. Module 1: Extract claims and guard against prompt injection
+    report("Reading the resume")
     claims_doc = extractor.extract_from_text(req.resume_text, links)
     if req.candidate_name and req.candidate_name.strip():
         claims_doc.candidate_name = req.candidate_name.strip()
@@ -169,22 +175,61 @@ def analyze_candidate(req: AnalyzeRequest):
 
     # 2. Module 2: Code Evidence Harvester (real git blame, AST parsing, test detection)
     try:
-        evidence_doc = harvester.harvest_many(repos, claims_doc.candidate_name, req.git_identities)
+        evidence_doc = harvester.harvest_many(repos, claims_doc.candidate_name, req.git_identities, progress=report)
     except RepoSourceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise JobFailure(str(exc), 400)
     except RepoAccessError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise JobFailure(str(exc), 422)
     if auto_detected:
         evidence_doc.warnings.insert(0, f"No repository was entered; analysed repositories linked in the resume: {', '.join(repos)}.")
 
-    # 3. Module 3: 4-State Rubric Engine & Cryptographic Signer
-    return passport_svc.generate_passport(claims_doc, evidence_doc)
+    # 3. Module 3: 4-State Rubric Engine & Cryptographic Signer (evidence was harvested by this server)
+    report("Scoring claims and signing the passport")
+    return passport_svc.generate_passport(claims_doc, evidence_doc, evidence_source="harvested")
 
 
-# --- Module 3: Rubric Verifier & Passport ---
-@app.post("/api/verify", response_model=PassportDocument)
-def verify_pipeline(req: VerifyRequest):
-    return passport_svc.generate_passport(req.claims, req.evidence, req.challenge_grades)
+@app.post("/api/analyze", response_model=PassportDocument, dependencies=[Depends(limit_analysis)])
+def analyze_candidate(req: AnalyzeRequest):
+    """Synchronous analysis for scripts. Browsers should use /api/jobs/analyze, since this can take minutes."""
+    try:
+        return _run_analysis(req)
+    except JobFailure as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+
+
+@app.post("/api/jobs/analyze", status_code=202, dependencies=[Depends(limit_analysis)])
+def start_analysis_job(req: AnalyzeRequest):
+    # Reject malformed repository links immediately instead of after queueing
+    for url in ([req.repo_url] if req.repo_url else []) + req.repo_urls:
+        if url and url.strip():
+            try:
+                parse_repo_source(url, allow_local=local_repos_allowed())
+            except RepoSourceError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        job = jobs.submit(lambda progress: _run_analysis(req, progress).model_dump(mode="json"))
+    except QueueFullError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"job_id": job.id, "status": job.status}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_analysis_job(job_id: str):
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired job.")
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "message": job.message,
+        "passport": job.result,
+        "error": job.error,
+        "error_status": job.error_status,
+    }
+
+
+# Note: there is deliberately no endpoint that scores caller-supplied evidence. The server's
+# signature vouches for the evidence, so it only signs evidence it harvested itself.
 
 
 # --- Module 3 & 4: What-If Simulator ---
@@ -196,7 +241,8 @@ def simulate_what_if(req: SimulationRequest):
 # --- Challenge Quiz Engine ---
 @app.get("/api/quiz/{skill}")
 def get_quiz(skill: str):
-    questions = quiz_engine.get_questions_for_skill(skill)
+    # Answers and explanations stay on the server until the quiz is submitted
+    questions = quiz_engine.public_questions(skill)
     if not questions:
         raise HTTPException(status_code=404, detail=f"No Skill Challenge exists for '{skill}' yet.")
     return {"skill": skill, "questions": questions}
@@ -227,12 +273,12 @@ def verify_signature(payload: Dict[str, Any] = Body(...), claimed_hash: Optional
 def get_demo_persona(persona: str):
     key = persona.lower()
     if key in ["priya", "honest"]:
-        return passport_svc.generate_passport(PRIYA_CLAIMS, PRIYA_EVIDENCE, {"Python": "A", "FastAPI": "B", "Docker": "C"})
+        return passport_svc.generate_passport(PRIYA_CLAIMS, PRIYA_EVIDENCE, {"Python": "A", "FastAPI": "B", "Docker": "C"}, evidence_source="demo")
     elif key in ["alex", "inflater", "spammer"]:
-        return passport_svc.generate_passport(ALEX_CLAIMS, ALEX_EVIDENCE, {"Python": "D", "Kubernetes": "E"})
+        return passport_svc.generate_passport(ALEX_CLAIMS, ALEX_EVIDENCE, {"Python": "D", "Kubernetes": "E"}, evidence_source="demo")
     elif key in ["jordan", "learner"]:
-        return passport_svc.generate_passport(JORDAN_CLAIMS, JORDAN_EVIDENCE, {"Python": "B", "Docker": "C"})
+        return passport_svc.generate_passport(JORDAN_CLAIMS, JORDAN_EVIDENCE, {"Python": "B", "Docker": "C"}, evidence_source="demo")
     elif key in ["redteam", "security", "adversary", "cheater"]:
-        return passport_svc.generate_passport(RED_TEAM_CLAIMS, RED_TEAM_EVIDENCE, {"Python": "D"})
+        return passport_svc.generate_passport(RED_TEAM_CLAIMS, RED_TEAM_EVIDENCE, {"Python": "D"}, evidence_source="demo")
     else:
         raise HTTPException(status_code=404, detail="Persona not found. Use 'priya', 'alex', 'jordan', or 'redteam'.")

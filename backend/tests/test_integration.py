@@ -58,13 +58,18 @@ def test_quiz_and_submission():
     questions = res.json()["questions"]
     assert len(questions) == 15
 
-    # Submit quiz
-    answers = {q["id"]: q["correct_index"] for q in questions}
+    # Answers are never sent to the browser before submission
+    assert all("correct_index" not in q and "explanation" not in q for q in questions)
+
+    # Submit quiz with the server-side answer key
+    from app.module3_rubric.question_bank import SAMPLE_QUIZZES
+    answers = {q.id: q.correct_index for q in SAMPLE_QUIZZES["Python"]}
     sub_res = client.post("/api/quiz/submit", json={"skill": "Python", "answers": answers})
     assert sub_res.status_code == 200
     result = sub_res.json()
     assert result["grade"] == "A"
     assert result["grade_weight"] == 10
+    assert len(result["review"]) == 15 and all("explanation" in r for r in result["review"])
 
 def test_simulate_what_if_endpoint():
     priya_res = client.get("/api/demo/priya")

@@ -1,14 +1,16 @@
 import os
 import shutil
 import tempfile
-from typing import Optional, Dict, Any, List, Iterable
+from typing import Optional, Dict, Any, List, Iterable, Callable
+
+Progress = Optional[Callable[[str], None]]
 from ..schemas import EvidenceDocument, SkillEvidence, QualitySignals, SampleSnippet, ExcludedRepo
 from ..skills import TESTING_SKILL_FRAMEWORKS
 from .git_crawler import GitBlameAnalyzer
 from .ast_analyzer import ASTAnalyzer
 from .test_detector import TestDetector
 from .fork_detector import ForkAndTemplateDetector
-from .github_api import GitHubClient
+from .github_api import GitHubClient, RATE_LIMITED
 from .repo_source import (
     RepoRef, RepoSourceError, RepoAccessError, parse_repo_source, clone_repo, local_repos_allowed
 )
@@ -33,6 +35,7 @@ class EvidenceHarvesterService:
         candidate_name: Optional[str] = None,
         identities: Optional[Iterable[str]] = None,
         allow_local: Optional[bool] = None,
+        progress: Progress = None,
     ) -> EvidenceDocument:
         """
         Gathers evidence from one public repository (or a local path when allowed).
@@ -47,12 +50,16 @@ class EvidenceHarvesterService:
             # The repo owner's login is a strong default identity (matches GitHub noreply emails)
             idents.append(ref.owner)
 
+        report = progress or (lambda _msg: None)
         if ref.local_path:
+            report(f"Analysing who wrote the code in {ref.url}")
             return self._analyze_path(ref.local_path, ref, candidate_name, idents)
 
         temp_dir = tempfile.mkdtemp(prefix="skill_passport_repo_")
         try:
+            report(f"Cloning {ref.url}")
             clone_repo(ref, temp_dir)
+            report(f"Analysing who wrote the code in {ref.url}")
             return self._analyze_path(temp_dir, ref, candidate_name, idents)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -63,6 +70,7 @@ class EvidenceHarvesterService:
         candidate_name: Optional[str] = None,
         identities: Optional[Iterable[str]] = None,
         allow_local: Optional[bool] = None,
+        progress: Progress = None,
     ) -> EvidenceDocument:
         """Harvest several repositories and merge them. Fails only if every repository fails."""
         unique: List[str] = []
@@ -78,9 +86,10 @@ class EvidenceHarvesterService:
         docs: List[EvidenceDocument] = []
         errors: List[str] = []
         only_input_errors = True
-        for source in unique:
+        for idx, source in enumerate(unique, start=1):
+            step = (lambda msg, i=idx: progress(f"Repository {i} of {len(unique)}: {msg}")) if progress else None
             try:
-                docs.append(self.harvest_repo(source, candidate_name, identities, allow_local))
+                docs.append(self.harvest_repo(source, candidate_name, identities, allow_local, step))
             except RepoSourceError as exc:
                 errors.append(str(exc))
             except RepoAccessError as exc:
@@ -127,9 +136,10 @@ class EvidenceHarvesterService:
             ev.route_definitions = ast_res["skill_routes"].get(skill, 0)
             skills_detected[skill] = ev
 
-        host_meta = self.github.repo_meta(ref.owner, ref.name) if ref.is_github else None
+        api_problems: List[str] = []
+        host_meta = self.github.repo_meta(ref.owner, ref.name, api_problems) if ref.is_github else None
         logins = [i for i in identities if "@" not in i and " " not in i]
-        merged_prs = self.github.merged_pr_count(ref.owner, ref.name, logins) if ref.is_github else None
+        merged_prs = self.github.merged_pr_count(ref.owner, ref.name, logins, api_problems) if ref.is_github else None
 
         deployed_url = None
         if host_meta:
@@ -182,8 +192,16 @@ class EvidenceHarvesterService:
             warnings.append(f"{ref.url} is large: authorship was measured on the first {blame_res['files_blamed']} files only.")
         if blame_res["is_shallow"]:
             warnings.append(f"{ref.url} has truncated history, so the single-commit dump check was skipped.")
-        if ref.is_github and host_meta is None:
-            notes.append(f"[{ref.url}] GitHub API unavailable: fork, deployment and pull request signals were not checked.")
+        if ref.is_github and self.github.enabled and (host_meta is None or merged_prs is None):
+            skipped = "fork, deployment and pull request checks" if host_meta is None else "the pull request check"
+            if RATE_LIMITED in api_problems:
+                warnings.append(
+                    f"GitHub API rate limit reached, so {skipped} were skipped for {ref.url}. "
+                    "Set GITHUB_TOKEN on the server to raise the limit."
+                )
+            else:
+                reason = ", ".join(sorted(set(api_problems))) or "unavailable"
+                warnings.append(f"GitHub API {reason}: {skipped} were skipped for {ref.url}.")
 
         return EvidenceDocument(
             repo_url=ref.url,

@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional
-from ..schemas import QuizQuestion, QuizResult
+from ..schemas import QuizQuestion, QuizResult, QuizReviewItem, PublicQuizQuestion
 from .scoring_engine import DeterministicScoringEngine, GRADE_WEIGHTS
 from ..skills import normalize_skill
 
@@ -248,6 +248,10 @@ class QuestionBankEngine:
         # Exact skill match only: a Python quiz must never grade a Java (or any other) claim
         return SAMPLE_QUIZZES.get(normalize_skill(skill), [])
 
+    def public_questions(self, skill: str) -> List[PublicQuizQuestion]:
+        return [PublicQuizQuestion(**q.model_dump(include={"id", "skill", "difficulty", "question", "options"}))
+                for q in self.get_questions_for_skill(skill)]
+
     def evaluate_quiz(self, skill: str, answers: Dict[str, int]) -> QuizResult:
         questions = self.get_questions_for_skill(skill)
         total = len(questions)
@@ -268,5 +272,9 @@ class QuestionBankEngine:
             correct_count=correct,
             percentage=pct,
             grade=grade,
-            grade_weight=grade_weight
+            grade_weight=grade_weight,
+            review=[
+                QuizReviewItem(id=q.id, chosen_index=answers.get(q.id), correct_index=q.correct_index, explanation=q.explanation)
+                for q in questions
+            ]
         )

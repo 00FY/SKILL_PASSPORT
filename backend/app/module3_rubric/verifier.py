@@ -158,7 +158,7 @@ class FourStateVerifier:
                     reason=reason,
                     evidence_found=f"Scanned {signals.test_file_count} test files; frameworks found: {', '.join(signals.test_frameworks) or 'none'}.",
                     suggested_remedy=f"Add a {skill_name} suite with real assertions to {where}" + ("" if in_scope else ", and include that repository in the audit") + "."
-                ), "EVALUATE_SKILL", "RULE_ZERO_TESTS_FOUND")
+                ), "EVALUATE_SKILL", "RULE_NO_CANDIDATE_TESTS")
                 plan_skills.append((skill_name, f"Add {skill_name} tests to {where}", where))
                 continue
 

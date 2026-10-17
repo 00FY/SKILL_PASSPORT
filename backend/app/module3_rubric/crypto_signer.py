@@ -31,10 +31,23 @@ class CryptoSigner:
     """
 
     @staticmethod
+    def _normalize(value: Any) -> Any:
+        # JSON clients disagree on whole-number floats (Python writes 12.0, JavaScript writes 12),
+        # so both are canonicalised to the integer form before hashing.
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, dict):
+            return {k: CryptoSigner._normalize(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [CryptoSigner._normalize(v) for v in value]
+        return value
+
+    @staticmethod
     def _canonical_bytes(passport_payload: Dict[str, Any]) -> bytes:
         # Canonical JSON representation without the hash itself or transient audit logs
         cleaned = {k: v for k, v in passport_payload.items() if k not in ["tamper_proof_hash", "audit_log"]}
-        canonical_str = json.dumps(cleaned, sort_keys=True, separators=(',', ':'), default=str)
+        cleaned = json.loads(json.dumps(cleaned, default=str))
+        canonical_str = json.dumps(CryptoSigner._normalize(cleaned), sort_keys=True, separators=(',', ':'))
         return canonical_str.encode('utf-8')
 
     @staticmethod

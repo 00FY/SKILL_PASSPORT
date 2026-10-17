@@ -45,7 +45,7 @@ class DeterministicScoringEngine:
         elif has_code_blame:
             return EVIDENCE_WEIGHTS["COMMITS_AUTHORED"], "Candidate-authored code in linked repositories"
         elif has_certificate:
-            return EVIDENCE_WEIGHTS["CERTIFICATE_ONLY"], "Verified certification link without production repo"
+            return EVIDENCE_WEIGHTS["CERTIFICATE_ONLY"], "Certificate link only (the certificate itself is not checked)"
         else:
             return EVIDENCE_WEIGHTS["RESUME_ONLY"], "Claimed on resume only with no code ground-truth"
 

@@ -1,24 +1,14 @@
 import React, { useState } from 'react';
-import { X, Check, Copy, Terminal, FileCode, Sparkles, CheckCircle2, ShieldCheck, Zap } from 'lucide-react';
+import { Check, Copy, Download, X } from 'lucide-react';
 
 interface PytestGeneratorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  candidateName: string;
-  repoContext?: string;
-  impactPct?: number;
 }
 
-export const PytestGeneratorModal: React.FC<PytestGeneratorModalProps> = ({
-  isOpen,
-  onClose,
-  candidateName,
-  repoContext = "https://github.com/jordan/task-manager",
-  impactPct
-}) => {
+export const PytestGeneratorModal: React.FC<PytestGeneratorModalProps> = ({ isOpen, onClose }) => {
+  const [copied, setCopied] = useState(false);
   if (!isOpen) return null;
-
-  const [copied, setCopied] = useState<boolean>(false);
 
   const starterPytestCode = `import pytest
 from fastapi.testclient import TestClient
@@ -61,83 +51,42 @@ def test_handle_invalid_task_id(invalid_id):
     assert response.status_code in [404, 422]
 `;
 
-  const handleCopy = () => {
+  const copy = () => {
     navigator.clipboard.writeText(starterPytestCode);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const download = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([starterPytestCode], { type: 'text/x-python' }));
+    a.download = 'test_main.py';
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-      <div className="w-full max-w-2xl bg-[#101112] border border-[#232426] rounded shadow-2xl overflow-hidden card-inner-glow flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="p-4 px-6 border-b border-[#1B1C1E] bg-[#0e0e0f] flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded bg-[#50d8e9]/10 border border-[#50d8e9]/30 flex items-center justify-center text-[#50d8e9]">
-              <FileCode className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-heading font-bold text-base text-[#e5e2e3]">
-                  Starter Pytest Suite Generator
-                </h3>
-                <span className="text-[10px] font-mono text-[#50d8e9] bg-[#50d8e9]/10 px-2 py-0.5 rounded border border-[#50d8e9]/20 font-bold">
-                  {impactPct !== undefined ? `+${impactPct}% MATCH IMPACT` : 'MATCH IMPACT'}
-                </span>
-              </div>
-              <p className="text-[11px] font-mono text-[#9A9DA3]">
-                Target: {repoContext.split('/').slice(-2).join('/')} • Candidate: {candidateName}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-[#9A9DA3] hover:text-[#e5e2e3] rounded hover:bg-[#1c1b1d] transition-colors"
-          >
-            <X className="w-4 h-4" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-white/10 bg-[#141516]">
+        <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
+          <h2 className="font-heading text-lg font-bold">Starter pytest file</h2>
+          <button onClick={onClose} className="rounded p-1 text-zinc-400 hover:bg-white/10 hover:text-white" aria-label="Close">
+            <X className="h-5 w-5" />
           </button>
         </div>
-
-        {/* Content Body */}
-        <div className="p-6 space-y-4 overflow-y-auto">
-          {/* Action explanation banner */}
-          <div className="bg-[#151617] border border-[#50d8e9]/20 rounded p-3.5 flex items-start gap-3">
-            <Zap className="w-4 h-4 text-[#50d8e9] shrink-0 mt-0.5" />
-            <div className="text-xs text-[#c6c5d8] leading-relaxed">
-              <strong className="text-[#e5e2e3]">Removes Testing Refusal:</strong> Save this file as <code className="text-[#50d8e9] font-mono">tests/test_main.py</code> in your repository. Once committed, the AST code detective will register 5 unit tests with assertions and upgrade your role match from <strong className="text-[#ffb689]">54%</strong> to <strong className="text-[#50d8e9]">63%</strong>.
-            </div>
-          </div>
-
-          {/* Code Box */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between text-xs font-mono">
-              <span className="text-[#9A9DA3] flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-[#50d8e9]" />
-                <span>tests/test_main.py</span>
-              </span>
-              <button
-                onClick={handleCopy}
-                className="flex items-center gap-1.5 px-3 py-1 rounded bg-[#1c1b1d] border border-[#2a2a2b] hover:border-[#50d8e9] text-[11px] font-mono text-[#50d8e9] transition-all"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copied ? 'Copied to Clipboard!' : 'Copy Pytest Suite'}</span>
-              </button>
-            </div>
-
-            <div className="bg-[#070708] border border-[#1B1C1E] rounded p-4 font-mono text-xs overflow-x-auto text-[#c6c5d8] leading-relaxed max-h-[380px]">
-              <pre>{starterPytestCode}</pre>
-            </div>
-          </div>
+        <div className="space-y-3 overflow-y-auto px-6 py-4 text-sm">
+          <p className="text-zinc-300">
+            A generic FastAPI test file to start from. Rename the routes and payloads to match your app, save it as
+            <code className="mx-1 text-indigo-300">tests/test_main.py</code>, commit, and run the audit again.
+          </p>
+          <pre className="overflow-auto rounded-lg bg-black/40 p-3 font-mono text-xs leading-relaxed text-zinc-200">{starterPytestCode}</pre>
         </div>
-
-        {/* Footer */}
-        <div className="p-3 px-6 border-t border-[#1B1C1E] bg-[#0e0e0f] flex justify-between items-center text-xs font-mono">
-          <span className="text-[#9A9DA3]">Run with: <code className="text-[#50d8e9]">pytest tests/ -v</code></span>
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded bg-[#1c1b1d] hover:bg-[#2a2a2b] text-[#e5e2e3] transition-colors"
-          >
-            Done
+        <div className="flex justify-end gap-2 border-t border-white/10 px-6 py-3 text-sm">
+          <button onClick={copy} className="flex items-center gap-2 rounded-lg border border-white/15 px-3 py-2 hover:bg-white/5">
+            {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}{copied ? 'Copied' : 'Copy'}
+          </button>
+          <button onClick={download} className="flex items-center gap-2 rounded-lg bg-indigo-500 px-3 py-2 font-semibold text-white hover:bg-indigo-400">
+            <Download className="h-4 w-4" />Download
           </button>
         </div>
       </div>

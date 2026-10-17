@@ -125,6 +125,20 @@ class QuizQuestion(BaseModel):
     correct_index: int
     explanation: str
 
+class PublicQuizQuestion(BaseModel):
+    """A quiz question as sent to the browser: no answer, no explanation."""
+    id: str
+    skill: str
+    difficulty: str
+    question: str
+    options: List[str]
+
+class QuizReviewItem(BaseModel):
+    id: str
+    chosen_index: Optional[int] = None
+    correct_index: int
+    explanation: str
+
 class QuizSubmission(BaseModel):
     skill: str
     answers: Dict[str, int]  # question_id -> selected_index
@@ -136,6 +150,7 @@ class QuizResult(BaseModel):
     percentage: float
     grade: str  # A, B, C, D, E
     grade_weight: int
+    review: List[QuizReviewItem] = Field(default_factory=list, description="Answers revealed only after submission")
 
 class AuditStep(BaseModel):
     step: str
@@ -151,6 +166,10 @@ class RunAuditLog(BaseModel):
     generated_at: str
 
 class PassportDocument(BaseModel):
+    evidence_source: str = Field(
+        default="harvested",
+        description="'harvested' = evidence collected by this server from real repositories; 'demo' = fictional sample data"
+    )
     candidate_name: str
     applied_role: str
     role_match_pct: int

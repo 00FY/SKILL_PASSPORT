@@ -18,8 +18,13 @@ class PassportService:
         self,
         claims_doc: ClaimsDocument,
         evidence_doc: EvidenceDocument,
-        challenge_grades: Optional[Dict[str, str]] = None
+        challenge_grades: Optional[Dict[str, str]] = None,
+        evidence_source: str = "harvested"
     ) -> PassportDocument:
+        """
+        Only call this with evidence the server harvested itself (or clearly labelled demo data):
+        the signature vouches for the evidence, so caller-supplied evidence must never be signed.
+        """
         audit = AuditTracer(candidate_name=claims_doc.candidate_name)
         audit.record(
             step="INIT_PIPELINE",
@@ -38,6 +43,7 @@ class PassportService:
         audit_log = audit.finalize()
 
         passport_dict = {
+            "evidence_source": evidence_source,
             "candidate_name": claims_doc.candidate_name,
             "applied_role": claims_doc.applied_role,
             "role_match_pct": role_match_pct,
@@ -60,6 +66,7 @@ class PassportService:
         signature_hash = CryptoSigner.sign_passport(passport_dict)
 
         return PassportDocument(
+            evidence_source=evidence_source,
             candidate_name=claims_doc.candidate_name,
             applied_role=claims_doc.applied_role,
             role_match_pct=role_match_pct,

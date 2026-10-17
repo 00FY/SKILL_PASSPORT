@@ -3,22 +3,16 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --bg-main: #131314;
-    --card-bg: #101112;
-    --border-color: #1B1C1E;
-  }
-
   body {
-    background-color: #131314;
-    color: #e5e2e3;
+    background-color: #121314;
+    color: #f4f4f5;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     overflow-x: hidden;
   }
 
-  h1, h2, h3, h4, .font-heading {
-    font-family: 'Manrope', sans-serif;
-    letter-spacing: -0.04em;
+  h1, h2, h3, .font-heading {
+    font-family: 'Manrope', 'Inter', sans-serif;
+    letter-spacing: -0.02em;
   }
 
   code, pre, .font-mono {
@@ -26,70 +20,14 @@
   }
 }
 
-/* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0e0e0f;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #232426;
-  border-radius: 2px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #353436;
-}
-
-/* Romer Specific Utilities */
-.grid-bg {
-  background-image: 
-    linear-gradient(to right, #1B1C1E 1px, transparent 1px),
-    linear-gradient(to bottom, #1B1C1E 1px, transparent 1px);
-  background-size: 32px 32px;
-}
-
-.card-inner-glow {
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.07);
-}
-
-.romer-panel {
-  background: #101112;
-  border: 1px solid #1B1C1E;
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
-}
-
-.romer-panel-elevated {
-  background: #151617;
-  border: 1px solid #232426;
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
-}
-
-.romer-panel-hover {
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.romer-panel-hover:hover {
-  border-color: #5E6BFF;
-  box-shadow: 0 4px 20px -2px rgba(94, 107, 255, 0.12), inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
-}
-
-/* Glowing text & beacons */
-.beacon-cyan {
-  box-shadow: 0 0 12px 2px rgba(80, 216, 233, 0.4);
-}
-.beacon-error {
-  box-shadow: 0 0 12px 2px rgba(255, 180, 171, 0.4);
-}
-.beacon-indigo {
-  box-shadow: 0 0 12px 2px rgba(94, 107, 255, 0.4);
-}
-
-@keyframes pulseBeacon {
-  0%, 100% { opacity: 0.8; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.15); }
-}
-
-.animate-beacon {
-  animation: pulseBeacon 2.5s infinite ease-in-out;
+  background: #2a2b2e;
+  border-radius: 3px;
 }
