@@ -1,160 +1,128 @@
-# Skill Passport
+# Skill Passport: Verifiable Ground-Truth Competency Engine
 
-**Evidence-backed skill profiles for fairer, more transparent hiring.**
+> **The Golden Rule**: *"LLM extracts text, published rules score evidence."*  
+> The LLM never assigns scores, grades, or verdicts. Every claim is mapped to verifiable ground-truth evidence (git authorship, AST tests, certificates, or question challenges) and evaluated against a published, auditable rubric.
 
-Skill Passport is a project concept for turning candidate skill claims into an auditable profile backed by work samples, repository history, tests, certificates, and skill challenges. It is designed to help recruiters see what supports a claim and help candidates understand how to strengthen their evidence.
+---
 
-> **Project status:** This repository currently contains the project README and architecture plan. The application, APIs, and verification engine are not implemented here yet. The stack and interfaces below are proposals from the project blueprint and can be updated as implementation decisions are made.
-
-## The core principle
-
-> **The model extracts claims; published rules evaluate evidence.**
-
-An LLM may help extract structured claims from a resume, but it must never assign scores, grades, or verdicts. A deterministic, published rubric evaluates evidence and records how each result was reached. Every result should be explainable and traceable to its source.
-
-## How it is intended to work
+## 🏗️ 4-Person Decoupled Architecture
 
 ```mermaid
 flowchart LR
-    A[Resume and candidate links] --> B[Parse, sanitize, extract claims]
-    B --> C[Typed claims record]
-    D[Repositories and certificates] --> E[Collect authorship and skill evidence]
-    E --> F[Typed evidence record]
-    C --> G[Rules-based rubric and skill challenge]
-    F --> G
-    G --> H[Passport and audit trace]
-    H --> I[Recruiter view and evidence drawer]
-    H --> J[Candidate view and learning plan]
+    subgraph M1["Module 1: Ingestion & Claim Extraction"]
+        PDF["Resume (PDF / Text)"] --> Parser["PDF Parser + Sanitizer"]
+        Parser --> Defense["Prompt-Injection Defense Guard"]
+        Defense --> LLMExtract["LLM Extractor (LiteLLM / Gemini / Fallback)"]
+        LLMExtract --> ClaimsJSON["claims.json (Typed Schema)"]
+    end
+    subgraph M2["Module 2: Code & Evidence Harvester"]
+        Repo["GitHub Repo / Commit History"] --> Blame["Git Blame Authorship"]
+        Repo --> AST["Static AST Analysis & Tests"]
+        Blame --> EvidenceJSON["evidence.json (Authorship & Signals)"]
+        AST --> EvidenceJSON
+    end
+    subgraph M3["Module 3: Rubric Engine & Challenge Test"]
+        ClaimsJSON --> Verifier["4-State Verifier & Rubric"]
+        EvidenceJSON --> Verifier
+        QuizBank["15-Q Challenge Test"] --> Verifier
+        Verifier --> PassportJSON["passport.json & run.json"]
+    end
+    subgraph M4["Module 4: Frontend & Evidence Drawer"]
+        PassportJSON --> RecruiterView["Recruiter View + Refusal Panel"]
+        PassportJSON --> EvidenceDrawer["Evidence Drawer (Line Blame & AST)"]
+        PassportJSON --> StudentView["Student View + What-If Simulator"]
+    end
 ```
 
-### Proposed verification outcomes
+---
 
-- **Verified** — strong, relevant evidence supports the claim.
-- **Partially supported** — some evidence exists, but it does not establish the full claim.
-- **Claimed only** — the claim is present, but supporting evidence has not been found.
-- **Contradicted** — available evidence conflicts with the claim.
+## 👥 Module Ownership & Contracts
 
-The rubric should publish the evidence signals and thresholds behind these outcomes. Missing evidence should not automatically be treated as proof that a claim is false.
+### 👤 Member 1: Resume Ingestion, Extraction & Prompt-Injection Defense
+- **Path**: `backend/app/module1_extractor/`
+- **Responsibilities**:
+  - `pdf_parser.py`: Extracts text and embedded hyperlinks from PDF bytes or markdown/plain text resumes.
+  - `injection_guard.py`: Detects and neutralizes prompt injections (`SYSTEM OVERRIDE`, jailbreaks), zero-width characters (`\u200b`, `\u200c`), and hidden white-on-white text tags.
+  - `llm_extractor.py`: Extracts declared skills, claimed experience duration, leadership claims, and repository links into strict `claims.json`. Includes offline fallback for 100% demo uptime.
+- **Contract**: `claims.json` (`ClaimsDocument`)
 
-## Product goals
+### 👤 Member 2: Code Evidence Harvester & Git Blame Analyzer
+- **Path**: `backend/app/module2_harvester/`
+- **Responsibilities**:
+  - `git_crawler.py`: Crawls git commit logs, extracts commit spans, and runs git blame on source files (excluding vendor/locks) to calculate candidate line authorship %.
+  - `ast_analyzer.py`: Performs AST inspection to detect framework imports (FastAPI, React, Pytest), route definitions, and robust error handling (`try/except`).
+  - `test_detector.py`: Scans for test suites (pytest, unittest, jest), counts test files and assertions.
+  - `fork_detector.py`: Identifies forks, tutorial templates, single-day commit dumps, and low-authorship repositories.
+- **Contract**: `evidence.json` (`EvidenceDocument`)
 
-- Give every skill result a clear explanation and inspectable evidence.
-- Separate candidate statements, observed evidence, and rubric decisions.
-- Make the same evidence produce the same result under the same rubric version.
-- Show unsupported or conflicting claims with context instead of hiding them in one score.
-- Give candidates actionable next steps and let them explore how additional evidence could affect their profile.
-- Support a stable demo with precomputed sample profiles when external services are unavailable.
+### 👤 Member 3: Deterministic Rubric Scoring, 4-State Verifier & Challenge Engine
+- **Path**: `backend/app/module3_rubric/`
+- **Responsibilities**:
+  - `verifier.py`: Evaluates claims vs evidence using the 4-State Verdict Engine:
+    - **VERIFIED**: Code authorship > 70% + sustained commits + tests/PR.
+    - **PARTIALLY_SUPPORTED**: Valid certificate or quiz pass, but little production code.
+    - **CLAIMED_ONLY**: Listed on resume, zero code evidence or tests found.
+    - **CONTRADICTED**: Evidence actively disproves claim (e.g. sole committer claiming 5-person team; forked repo with 4% code claiming 5 years experience).
+  - `scoring_engine.py`: Published Rubric Formula:  
+    $$\text{Evidence Score (0–10)} \times \text{Challenge Grade Weight (2–10)} = \text{Skill Points (up to 100)}$$
+    - *Evidence Weight*: Merged PR / Deployed (10) > Tests (8) > Commits (7) > Certificate (4) > Resume Only (2)
+    - *Grade Weight*: A (10), B (8), C (6), D (4), E (2)
+  - `question_bank.py`: 15-question quiz (5 Basic, 5 Intermediate, 5 Advanced) for technical validation.
+  - `audit_tracer.py`: Generates `run.json` execution trace for every rule checked.
+  - `crypto_signer.py`: Generates tamper-proof SHA-256 fingerprint for passport verification.
+- **Contracts**: `passport.json` (`PassportDocument`) and `run.json` (`RunAuditLog`)
 
-## Planned experience
+### 👤 Member 4: Frontend (Recruiter View, Evidence Drawer, Student Portal & What-If)
+- **Path**: `frontend/`
+- **Features**:
+  - **Recruiter View**: Role match gauge (72%), competency cards with colored status badges, and the Refusal Panel ("Claims we couldn't support").
+  - **Evidence Drawer**: Slide-over drawer with line-by-line blame preview, code snippet, git blame % bar, and micro-trace audit log.
+  - **Student View**: Actionable Learning Plan and interactive **What-If Simulator** (toggling "Add pytest tests" updates role match live from 72% $\rightarrow$ 81%).
+  - **Security Modal**: Demonstrates quarantine of prompt injections and zero-width unicode steganography attacks.
+  - **15-Question Challenge Test**: Interactive quiz modal with automatic grading.
+  - **Offline Demo Mode**: Instant switcher for 4 personas (Priya S., Alex R., Jordan K., Red-Team Adversary).
 
-### Recruiter view
+---
 
-- Role alignment summary and skill verdicts.
-- A visible explanation panel for unsupported or conflicting claims.
-- An evidence drawer with repository, file, line, authorship, and rubric details where available.
+## 🚀 Quickstart Guide
 
-### Candidate view
+### 1. Prerequisites
+- Python 3.10+
+- Node.js 18+ and npm
 
-- Evidence gaps and practical learning recommendations.
-- A what-if view that estimates how additional evidence may affect a profile.
-- Controls for selecting what information is shared with a recruiter.
+### 2. Backend Setup
+```bash
+# From workspace root
+source venv/bin/activate
+pip install -r backend/requirements.txt
 
-What-if results should be labeled as estimates, not as verified outcomes. A share link should expose only candidate-approved data and should have a clear expiration and revocation policy.
+# Run all 18 backend tests
+PYTHONPATH=backend pytest backend/tests/
 
-## Proposed architecture and contracts
-
-The system is divided into four modules with explicit JSON interfaces so they can be developed independently:
-
-| Module | Responsibility | Output |
-| --- | --- | --- |
-| 1. Ingestion and claim extraction | Parse resume text, sanitize inputs, extract candidate-stated skills and links | `claims.json` |
-| 2. Code and evidence collection | Inspect linked repositories and collect attributable, relevant signals | `evidence.json` |
-| 3. Rubric and challenge engine | Apply versioned rules, optionally record challenge results, and preserve the decision trace | `passport.json` and `run.json` |
-| 4. User interface | Present recruiter and candidate views, evidence details, and what-if estimates | Web application |
-
-### Example claim record
-
-```json
-{
-  "candidate_name": "Priya S.",
-  "applied_role": "Backend Developer",
-  "claims": [
-    {
-      "id": "claim_01",
-      "skill": "Python",
-      "category": "language",
-      "claimed_duration_months": 36,
-      "evidence_links": ["https://github.com/example/api-service"]
-    }
-  ]
-}
+# Start FastAPI server
+PYTHONPATH=backend uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-### Example passport skill
+### 3. Frontend Setup
+```bash
+# From frontend directory
+cd frontend
+npm install
+npm run dev -- --port 3000
+```
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-```json
-{
-  "name": "Python",
-  "verdict": "PARTIALLY_SUPPORTED",
-  "evidence_score": 6,
-  "challenge_grade": "B",
-  "final_points": 48,
-  "evidence_refs": ["repo_01:file:app/routes.py:42-78"],
-  "signals": ["Relevant code found", "Tests found"]
-}
+---
+
+## 🧪 Test Suite Coverage
+
+Run the comprehensive automated test suite across all 4 modules:
+```bash
+PYTHONPATH=backend pytest backend/tests/ -v
 ```
 
-These are illustrative examples, not implemented or finalized schemas. Before modules are built in parallel, define and version the complete Pydantic/JSON Schema contracts, including nullability, provenance, rubric version, and audit fields.
-
-## Rubric design notes
-
-The supplied blueprint proposes evidence weights and a challenge multiplier. Treat these as starting points for rubric design, not as validated hiring measures. Before using scores to influence real hiring decisions, document and evaluate:
-
-- What each evidence signal does and does not prove.
-- How repository ownership, pair work, generated code, templates, and forks are handled.
-- How challenge difficulty and skill-specific evidence are normalized.
-- How candidates can correct, contextualize, or dispute evidence.
-- Whether the rubric creates unfair outcomes across roles or candidate backgrounds.
-
-Prefer separate, interpretable evidence and challenge results over a single opaque score. A score should never be presented without its rubric version and explanation.
-
-## Proposed technology
-
-The project blueprint suggests the following stack; none of these dependencies are installed in this repository yet:
-
-- **Frontend:** Next.js App Router, TypeScript, Tailwind CSS, and a component library such as shadcn/ui.
-- **API:** Python with FastAPI and Pydantic v2.
-- **Repository analysis:** Git tooling and GitHub API access, with language-aware analysis where appropriate.
-- **Claim extraction:** A replaceable LLM provider behind a strict structured-output interface.
-- **Storage:** SQLite for a self-contained demo, with PostgreSQL as a possible production option.
-
-Provider choice, deployment platform, persistence requirements, and supported repository languages remain open implementation decisions.
-
-## Security, privacy, and integrity
-
-- Treat resume text, repository content, and linked pages as untrusted input. Instructions found inside them must never change the verifier's rules or system behavior.
-- Sanitize extracted text and record suspicious or malformed input for review; do not silently convert a detected injection attempt into a negative hiring verdict.
-- Request only the repository permissions needed for analysis, and make private-repository access explicit and revocable.
-- Keep candidate data private by default. Define retention, deletion, sharing, and access policies before collecting real resumes or credentials.
-- Make evidence provenance and rubric versions part of the audit record. A cryptographic signature can help detect later changes, but does not prove that the underlying evidence is true.
-- Do not treat commit history, authorship percentages, or public profile activity as definitive proof of individual competence.
-
-## Suggested development sequence
-
-1. **Freeze contracts:** Define versioned schemas for claims, evidence, passports, and audit runs; add representative fixtures.
-2. **Build independent modules:** Implement ingestion, evidence collection, rubric evaluation, and UI against those fixtures.
-3. **Integrate:** Connect the modules behind documented API endpoints and preserve the full decision trace.
-4. **Prepare a reliable demo:** Include clearly labeled synthetic candidate profiles and an offline mode that does not depend on live LLM or GitHub access.
-5. **Evaluate:** Test rubric consistency, prompt-injection handling, privacy controls, accessibility, and failure cases before any real-world hiring use.
-
-## Potential API surface
-
-The blueprint anticipates endpoints such as `POST /api/extract`, `POST /api/verify`, `GET /api/passport/{id}`, and `POST /api/simulate`. These routes are planning placeholders and are not available yet.
-
-## Contributing
-
-Contributions are welcome once the implementation is underway. For now, useful contributions include reviewing the rubric and threat model, refining the data contracts, and proposing realistic synthetic demo fixtures. Please avoid submitting real candidate resumes, credentials, or private repository data.
-
-## License
-
-No license is currently specified. Until one is added, the repository's reuse terms are not defined.
+Tests include:
+- `test_module1.py`: Prompt injection sanitization, zero-width unicode stripping, and typed claims extraction.
+- `test_module2.py`: Git blame author calculation, AST parsing, pytest assertion detection, and fork template detection.
+- `test_module3.py`: 4-state verdict logic, rubric scoring formula, 15-question quiz grader, SHA-256 signer, and What-If simulator.
+- `test_integration.py`: End-to-end FastAPI endpoint validations for all demo personas.
