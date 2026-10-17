@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   TrendingUp, ArrowRight, ShieldCheck, Share2, Eye, EyeOff,
   Sparkles, Check, Copy, Terminal, Zap, Code
@@ -29,6 +29,32 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [simulatedOverall, setSimulatedOverall] = useState<number>(overall_score);
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [impacts, setImpacts] = useState<Record<string, number | null>>({});
+
+  // Reset the simulator and compute each toggle's impact with the same engine that scored the passport
+  useEffect(() => {
+    setToggles({ add_pytest: false, add_deploy: false, sustained_commits: false });
+    setSimulatedRoleMatch(role_match_pct);
+    setSimulatedOverall(overall_score);
+    setImpacts({});
+    let cancelled = false;
+    (['add_pytest', 'add_deploy', 'sustained_commits'] as const).forEach(async (key) => {
+      try {
+        const res = await onSimulateScore({ [key]: true });
+        if (!cancelled) setImpacts(prev => ({ ...prev, [key]: res.newRoleMatch - role_match_pct }));
+      } catch {
+        if (!cancelled) setImpacts(prev => ({ ...prev, [key]: null }));
+      }
+    });
+    return () => { cancelled = true; };
+  }, [passport.tamper_proof_hash]);
+
+  const impactLabel = (key: string) => {
+    const v = impacts[key];
+    if (v === undefined) return '... IMPACT';
+    if (v === null) return 'IMPACT N/A';
+    return `+${v}% IMPACT`;
+  };
 
   const [privacyToggles, setPrivacyToggles] = useState<Record<string, boolean>>({
     show_shopapi: true,
@@ -127,7 +153,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-mono font-bold text-[#50d8e9] bg-[#50d8e9]/10 px-1.5 py-0.5 rounded">
-                +9% IMPACT
+                {impactLabel('add_pytest')}
               </span>
               <input
                 type="checkbox"
@@ -166,7 +192,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-mono font-bold text-[#50d8e9] bg-[#50d8e9]/10 px-1.5 py-0.5 rounded">
-                +8% IMPACT
+                {impactLabel('add_deploy')}
               </span>
               <input
                 type="checkbox"
@@ -190,7 +216,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-mono font-bold text-[#50d8e9] bg-[#50d8e9]/10 px-1.5 py-0.5 rounded">
-                +7% IMPACT
+                {impactLabel('sustained_commits')}
               </span>
               <input
                 type="checkbox"
@@ -337,6 +363,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
         onClose={() => setIsPytestModalOpen(false)}
         candidateName={candidate_name}
         repoContext={passport.repo_url}
+        impactPct={impacts.add_pytest ?? undefined}
       />
     </div>
   );

@@ -2,9 +2,26 @@ import os
 import hmac
 import hashlib
 import json
+import logging
+import secrets
 from typing import Dict, Any
 
-SECRET_KEY = os.environ.get("SKILL_PASSPORT_HMAC_SECRET", "skill-passport-verifiable-hmac-key-2025").encode("utf-8")
+logger = logging.getLogger(__name__)
+
+
+def _load_secret() -> bytes:
+    configured = os.environ.get("SKILL_PASSPORT_HMAC_SECRET")
+    if configured:
+        return configured.encode("utf-8")
+    # Never fall back to a key published in source code: anyone could forge passports with it.
+    logger.warning(
+        "SKILL_PASSPORT_HMAC_SECRET is not set; using a random per-process key. "
+        "Passports signed now will stop verifying after a restart."
+    )
+    return secrets.token_bytes(32)
+
+
+SECRET_KEY = _load_secret()
 
 class CryptoSigner:
     """
@@ -47,14 +64,7 @@ class CryptoSigner:
                 "reason": "Cryptographic HMAC-SHA256 signature successfully verified against canonical passport JSON."
             }
 
-        # Backwards compatibility check for legacy sha256: signatures
-        expected_sha = f"sha256:{hashlib.sha256(canonical_bytes).hexdigest()}"
-        if hmac.compare_digest(expected_sha, signature):
-            return {
-                "valid": True,
-                "reason": "Legacy SHA-256 digital digest successfully verified against canonical passport JSON."
-            }
-
+        # Unkeyed "sha256:" digests are deliberately not accepted: anyone can recompute them.
         return {
             "valid": False,
             "reason": "Signature verification failed: Passport payload has been altered, forged, or tampered with."

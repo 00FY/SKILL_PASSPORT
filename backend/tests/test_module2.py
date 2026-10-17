@@ -7,7 +7,8 @@ from app.module2_harvester import (
     ASTAnalyzer,
     TestDetector,
     ForkAndTemplateDetector,
-    EvidenceHarvesterService
+    EvidenceHarvesterService,
+    GitHubClient
 )
 from app.schemas import EvidenceDocument
 
@@ -76,8 +77,8 @@ def test_git_blame_analyzer_authorship_pct(sample_git_repo):
     assert "Python" in res["language_lines"]
 
 def test_harvester_service_conforms_to_contract(sample_git_repo):
-    harvester = EvidenceHarvesterService()
-    doc: EvidenceDocument = harvester.harvest_repo(sample_git_repo, candidate_name="Priya S.")
+    harvester = EvidenceHarvesterService(github_client=GitHubClient(enabled=False))
+    doc: EvidenceDocument = harvester.harvest_repo(sample_git_repo, candidate_name="Priya S.", allow_local=True)
     assert isinstance(doc, EvidenceDocument)
     assert doc.candidate_authorship_pct > 90.0
     assert doc.signals.has_tests is True

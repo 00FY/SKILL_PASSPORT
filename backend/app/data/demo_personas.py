@@ -51,6 +51,8 @@ PRIYA_CLAIMS = ClaimsDocument(
 
 PRIYA_EVIDENCE = EvidenceDocument(
     repo_url="https://github.com/priya/api-service",
+    repo_urls=["https://github.com/priya/api-service"],
+    unique_contributors=1,
     is_fork=False,
     is_cloned_template=False,
     candidate_authorship_pct=91.2,
@@ -156,6 +158,8 @@ ALEX_CLAIMS = ClaimsDocument(
 
 ALEX_EVIDENCE = EvidenceDocument(
     repo_url="https://github.com/alex/cloud-starter",
+    repo_urls=["https://github.com/alex/cloud-starter"],
+    unique_contributors=1,
     is_fork=True,
     is_cloned_template=True,
     candidate_authorship_pct=4.1,
@@ -226,6 +230,8 @@ JORDAN_CLAIMS = ClaimsDocument(
 
 JORDAN_EVIDENCE = EvidenceDocument(
     repo_url="https://github.com/jordan/task-manager",
+    repo_urls=["https://github.com/jordan/task-manager"],
+    unique_contributors=1,
     is_fork=False,
     is_cloned_template=False,
     candidate_authorship_pct=78.5,
@@ -309,6 +315,8 @@ RED_TEAM_CLAIMS = ClaimsDocument(
 
 RED_TEAM_EVIDENCE = EvidenceDocument(
     repo_url="https://github.com/redteam/poc",
+    repo_urls=["https://github.com/redteam/poc"],
+    unique_contributors=1,
     is_fork=False,
     candidate_authorship_pct=12.0,
     active_months=1,

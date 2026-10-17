@@ -12,7 +12,7 @@ import {
   MOCK_PRIYA, MOCK_ALEX, MOCK_JORDAN, MOCK_REDTEAM,
   PassportDocument, SkillPassportItem
 } from './data/mockData';
-import { ShieldCheck, Lock, Activity } from 'lucide-react';
+import { ShieldCheck, Lock, Activity, AlertTriangle } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [currentPersonaKey, setCurrentPersonaKey] = useState<string>('priya');
@@ -183,6 +183,14 @@ export const App: React.FC = () => {
 
         {/* Content Body */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
+          {passport.warnings && passport.warnings.length > 0 && (
+            <div className="p-3.5 rounded bg-[#1d1a14] border border-[#ffb689]/30 flex items-start gap-3 text-xs font-mono text-[#ffb689]">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                {passport.warnings.map((w, i) => <p key={i}>{w}</p>)}
+              </div>
+            </div>
+          )}
           {activeView === 'recruiter' ? (
             <RecruiterView
               passport={passport}

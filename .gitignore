@@ -27,3 +27,6 @@ yarn-error.log*
 *.swo
 .vscode/
 .idea/
+
+# Generated promo-video output from the brag skill
+brag-output/

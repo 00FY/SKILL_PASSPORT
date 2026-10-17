@@ -61,11 +61,13 @@ export interface PassportDocument {
   active_months?: number;
   total_commits?: number;
   repo_url?: string;
+  repo_urls?: string[];
   is_fork?: boolean;
   skills: SkillPassportItem[];
   refusal_panel: RefusalItem[];
   learning_plan: LearningPlanItem[];
   security_alerts: SecurityFlag[];
+  warnings?: string[];
   tamper_proof_hash: string;
   issued_at: string;
   audit_log?: RunAuditLog;

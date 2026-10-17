@@ -1,11 +1,37 @@
 import re
 from typing import List, Dict, Tuple, Optional
 from ..schemas import (
-    ClaimsDocument, EvidenceDocument, VerdictEnum,
-    SkillPassportItem, RefusalItem, LearningPlanItem, SampleSnippet
+    ClaimsDocument, ClaimItem, EvidenceDocument, VerdictEnum, SkillEvidence,
+    SkillPassportItem, RefusalItem, LearningPlanItem
 )
-from .scoring_engine import DeterministicScoringEngine, GRADE_WEIGHTS
+from ..skills import (
+    normalize_skill, min_lines_for, ecosystem_for, TEST_FRAMEWORK_ECOSYSTEM, TESTING_SKILL_FRAMEWORKS
+)
+from ..module2_harvester.repo_source import parse_repo_source, RepoSourceError
+from .scoring_engine import (
+    DeterministicScoringEngine, GRADE_WEIGHTS, CONTRADICTED_POINTS, CLAIMED_ONLY_EVIDENCE, CLAIMED_ONLY_GRADE
+)
 from .audit_tracer import AuditTracer
+
+CODE_HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
+CERT_MARKERS = ("coursera.org/verify", "coursera.org/account/accomplishments", "credly.com", "credential.net",
+                "udemy.com/certificate", "/verify/", "/certificate", "certificates.", "verify.")
+# A meaningful share of the files backing a skill counts as code evidence (PARTIALLY_SUPPORTED);
+# VERIFIED additionally needs a majority share and sustained history.
+MIN_AUTHORSHIP_FOR_CODE = 25.0
+MIN_AUTHORSHIP_FOR_VERIFIED = 70.0
+MIN_MONTHS_FOR_VERIFIED = 3
+GIT_MIN_COMMITS = 10
+# A learning-plan action is modelled as reaching the "tests verified" evidence tier
+HYPOTHETICAL_EVIDENCE = 8
+
+
+def _repo_key(url: str) -> Optional[str]:
+    try:
+        return parse_repo_source(url).url.lower()
+    except RepoSourceError:
+        return None
+
 
 class FourStateVerifier:
     """
@@ -14,6 +40,8 @@ class FourStateVerifier:
     - PARTIALLY_SUPPORTED
     - CLAIMED_ONLY
     - CONTRADICTED
+
+    Every rule reads only the claims and evidence documents; nothing is keyed to specific candidates.
     """
 
     def __init__(self, scoring_engine: Optional[DeterministicScoringEngine] = None):
@@ -26,138 +54,119 @@ class FourStateVerifier:
         audit_tracer: AuditTracer,
         challenge_grades: Optional[Dict[str, str]] = None
     ) -> Tuple[List[SkillPassportItem], List[RefusalItem], List[LearningPlanItem], int, int]:
-        if challenge_grades is None:
-            challenge_grades = {}
+        challenge_grades = {normalize_skill(k).lower(): v for k, v in (challenge_grades or {}).items()}
 
         skills_out: List[SkillPassportItem] = []
-        refusals_out: List[RefusalItem] = []
-        learning_plan: List[LearningPlanItem] = []
+        refusals: List[Tuple[Optional[str], RefusalItem]] = []
+        plan_skills: List[Tuple[str, str, Optional[str]]] = []  # (skill, action, repo_context)
 
-        total_points = 0
-        max_possible_points = 0
+        analysed_repos = {k for k in (_repo_key(u) for u in (evidence_doc.repo_urls or [evidence_doc.repo_url])) if k}
+        signals = evidence_doc.signals
+        repo_label = ", ".join(evidence_doc.repo_urls or [evidence_doc.repo_url]) or "linked repositories"
 
-        # Map claims by normalized skill name
-        claims_by_skill = {c.skill.lower(): c for c in claims_doc.claims}
+        def refuse(skill: Optional[str], item: RefusalItem, step: str, rule: str):
+            audit_tracer.record(step=step, target=skill or item.claim, rule_applied=rule, verdict_reached=item.verdict.value)
+            refusals.append((skill, item))
 
-        # 1. Check Contradiction on Team Leadership / Role Claims
+        # 0. Repositories excluded from evidence (laundered / forked) when other repos were usable
+        for ex in evidence_doc.excluded_repos:
+            refuse(None, RefusalItem(
+                claim=f"Authentic development in {ex.repo_url}",
+                verdict=VerdictEnum.CONTRADICTED,
+                reason=ex.reason,
+                evidence_found="Repository excluded from evidence; claims were scored on the remaining repositories.",
+                suggested_remedy="Link repositories with original, incrementally committed work."
+            ), "REPO_EXCLUSION", "RULE_EXCLUDE_DISQUALIFIED_REPO")
+
+        # 1. Contradiction checks on team-leadership and duration claims
         for claim in claims_doc.claims:
-            if claim.category == "soft_skill" or "team" in claim.skill.lower() or "led" in (claim.claimed_detail or "").lower():
+            if claim.category == "soft_skill" or "team" in claim.skill.lower():
                 detail_text = (claim.claimed_detail or "").lower()
-                num_claimed_match = re.search(r'(\d+)\s*[- ]*(person|member|engineer|developer)', detail_text)
-                claimed_team_size = int(num_claimed_match.group(1)) if num_claimed_match else 0
+                size_match = re.search(r"(\d+)\s*[- ]*(person|member|people|engineer|developer)|team\s+of\s+(\d+)", detail_text)
+                claimed_team_size = int(size_match.group(1) or size_match.group(3)) if size_match else 0
 
-                # Check evidence committers / contributors
-                # If candidate is the sole committer in repo (active contributors == 1) or repo is fork
-                if evidence_doc.signals.commit_count > 0:
-                    # In evidence, check contributors or fork
-                    if evidence_doc.is_fork and evidence_doc.candidate_authorship_pct < 10.0:
-                        audit_tracer.record(
-                            step="CONTRADICTION_CHECK",
-                            target=claim.skill,
-                            rule_applied="RULE_SOLE_OR_FORK_LEADERSHIP",
-                            verdict_reached="CONTRADICTED"
-                        )
-                        refusals_out.append(
-                            RefusalItem(
-                                claim=f"{claim.claimed_detail or claim.skill}",
-                                verdict=VerdictEnum.CONTRADICTED,
-                                reason="Repository is a template fork where candidate authored only 4.1% of lines.",
-                                evidence_found="Forked commit tree with 0 original architecture PRs.",
-                                suggested_remedy="Provide repository with PR reviews and multi-author collaboration traces."
-                            )
-                        )
-                    elif claimed_team_size > 1 and "shopapi" in (claim.claimed_detail or "").lower():
-                        audit_tracer.record(
-                            step="CONTRADICTION_CHECK",
-                            target=claim.skill,
-                            rule_applied="RULE_SOLE_CONTRIBUTOR_TEAM_MISMATCH",
-                            verdict_reached="CONTRADICTED"
-                        )
-                        refusals_out.append(
-                            RefusalItem(
-                                claim=f"{claim.claimed_detail or 'Led a 5-person team'}",
-                                verdict=VerdictEnum.CONTRADICTED,
-                                reason="Sole committer in every public repository linked (1 contributor found).",
-                                evidence_found="1 contributor in git commit logs; 0 pull requests reviewed from team members.",
-                                suggested_remedy="Link repositories with pull requests merged across peer developers."
-                            )
-                        )
+                if signals.commit_count > 0 and evidence_doc.is_fork and evidence_doc.candidate_authorship_pct < 10.0:
+                    refuse(claim.skill, RefusalItem(
+                        claim=claim.claimed_detail or claim.skill,
+                        verdict=VerdictEnum.CONTRADICTED,
+                        reason=f"Repository is a template fork where candidate authored only {round(evidence_doc.candidate_authorship_pct, 1)}% of lines.",
+                        evidence_found="Forked commit tree with no original collaboration history.",
+                        suggested_remedy="Provide repository with PR reviews and multi-author collaboration traces."
+                    ), "CONTRADICTION_CHECK", "RULE_SOLE_OR_FORK_LEADERSHIP")
+                elif (claimed_team_size > 1 and signals.commit_count > 0
+                      and evidence_doc.unique_contributors is not None and evidence_doc.unique_contributors <= 1):
+                    refuse(claim.skill, RefusalItem(
+                        claim=claim.claimed_detail or claim.skill,
+                        verdict=VerdictEnum.CONTRADICTED,
+                        reason="Sole committer in every public repository linked (1 contributor found).",
+                        evidence_found=f"1 contributor in git commit logs of {repo_label}; {signals.merged_prs} merged pull requests.",
+                        suggested_remedy="Link repositories with pull requests merged across peer developers."
+                    ), "CONTRADICTION_CHECK", "RULE_SOLE_CONTRIBUTOR_TEAM_MISMATCH")
 
-            # Check Duration Contradiction: e.g. claimed 36 months, git shows 2 weeks
-            if claim.claimed_duration_months and claim.claimed_duration_months >= 24:
-                if evidence_doc.active_months <= 1 and evidence_doc.signals.single_day_commit_dump:
-                    audit_tracer.record(
-                        step="DURATION_CONTRADICTION_CHECK",
-                        target=claim.skill,
-                        rule_applied="RULE_DURATION_GIT_SPAN_MISMATCH",
-                        verdict_reached="CONTRADICTED"
-                    )
-                    refusals_out.append(
-                        RefusalItem(
-                            claim=f"Claimed {claim.claimed_duration_months // 12} years experience in {claim.skill}",
-                            verdict=VerdictEnum.CONTRADICTED,
-                            reason=f"Git commit history spans only {evidence_doc.active_months} month(s) with single-day commit dumps.",
-                            evidence_found=f"First commit {evidence_doc.first_commit} to last commit {evidence_doc.last_commit}.",
-                            suggested_remedy="Publish repositories demonstrating continuous historical development."
-                        )
-                    )
+            # Duration contradiction: e.g. claimed 3 years, git shows a one-day dump
+            if (claim.claimed_duration_months and claim.claimed_duration_months >= 24
+                    and signals.commit_count > 0 and self._in_scope(claim, analysed_repos)
+                    and evidence_doc.active_months <= 1 and signals.single_day_commit_dump):
+                refuse(claim.skill, RefusalItem(
+                    claim=f"Claimed {claim.claimed_duration_months // 12} years experience in {claim.skill}",
+                    verdict=VerdictEnum.CONTRADICTED,
+                    reason=f"Git commit history spans only {evidence_doc.active_months} month(s) with single-day commit dumps.",
+                    evidence_found=f"First commit {evidence_doc.first_commit} to last commit {evidence_doc.last_commit}.",
+                    suggested_remedy="Publish repositories demonstrating continuous historical development."
+                ), "DURATION_CONTRADICTION_CHECK", "RULE_DURATION_GIT_SPAN_MISMATCH")
 
         # 2. Evaluate Skill Claims Against Ground-Truth Evidence
+        seen_skills = set()
         for claim in claims_doc.claims:
             if claim.category == "soft_skill":
                 continue
+            skill_name = normalize_skill(claim.skill)
+            if skill_name.lower() in seen_skills:
+                continue
+            seen_skills.add(skill_name.lower())
 
-            skill_name = claim.skill
-            skill_key = skill_name
-            # Find evidence match
-            ev_skill = None
-            for ek, ev in evidence_doc.skills_detected.items():
-                if ek.lower() in skill_name.lower() or skill_name.lower() in ek.lower():
-                    ev_skill = ev
-                    skill_key = ek
-                    break
+            in_scope = self._in_scope(claim, analysed_repos)
+            ev_skill = self._find_evidence(skill_name, evidence_doc) if in_scope else None
+            is_testing_skill = claim.category == "testing" or skill_name in TESTING_SKILL_FRAMEWORKS
+            has_certificate = any(any(m in l.lower() for m in CERT_MARKERS) for l in claim.evidence_links)
 
-            has_certificate = any("coursera" in l.lower() or "verify" in l.lower() or "cert" in l.lower() for l in claim.evidence_links)
-            has_code_blame = (ev_skill is not None and ev_skill.lines_authored > 100 and evidence_doc.candidate_authorship_pct >= 60.0)
-            has_tests = (evidence_doc.signals.has_tests and evidence_doc.signals.test_file_count > 0 and skill_name in ["Python", "Testing (pytest)", "FastAPI"])
-            has_deployed_or_pr = (evidence_doc.signals.deployed_url is not None or evidence_doc.signals.merged_prs > 0) and has_code_blame
+            if skill_name == "Git":
+                has_code_blame = signals.candidate_commit_count >= GIT_MIN_COMMITS
+                skill_pct = evidence_doc.candidate_authorship_pct if has_code_blame else None
+            else:
+                skill_pct = ev_skill.authorship_pct if ev_skill and ev_skill.authorship_pct is not None else evidence_doc.candidate_authorship_pct
+                has_code_blame = (ev_skill is not None and ev_skill.lines_authored >= min_lines_for(skill_name)
+                                  and skill_pct >= MIN_AUTHORSHIP_FOR_CODE)
+            has_tests = self._has_tests_for(skill_name, ev_skill, evidence_doc) if in_scope else False
+            has_deployed_or_pr = (signals.deployed_url is not None or signals.merged_prs > 0) and has_code_blame
 
-            grade = challenge_grades.get(skill_name, "A" if (has_code_blame and has_tests) else ("B" if has_code_blame else "C"))
+            grade = challenge_grades.get(skill_name.lower(), "A" if (has_code_blame and has_tests) else ("B" if has_code_blame else "C"))
 
-            # Check for Testing claim specifically when no tests found or linked repo has 0 tests
-            is_shop_api = any("shop-api" in l.lower() for l in claim.evidence_links)
-            if "test" in skill_name.lower() and (not evidence_doc.signals.has_tests or is_shop_api):
-                audit_tracer.record(
-                    step="EVALUATE_SKILL",
-                    target=skill_name,
-                    rule_applied="RULE_ZERO_TESTS_FOUND",
-                    verdict_reached="CLAIMED_ONLY"
-                )
-                target_repo_name = "ShopAPI" if is_shop_api else evidence_doc.repo_url.split('/')[-1]
-                refusals_out.append(
-                    RefusalItem(
-                        claim=f"Testing (pytest)",
-                        verdict=VerdictEnum.CLAIMED_ONLY,
-                        reason=f"Listed on resume, but zero test assertions or test files found in {target_repo_name}.",
-                        evidence_found="Scanned 0 test files matching pytest/unittest/jest patterns.",
-                        suggested_remedy=f"Add pytest test suite with unit assertions to {target_repo_name}."
-                    )
-                )
-                learning_plan.append(
-                    LearningPlanItem(
-                        action=f"Add pytest tests to {target_repo_name}",
-                        skill=skill_name,
-                        potential_impact="+9% role match (72% → 81%)",
-                        target_score_delta=9,
-                        repo_context=target_repo_name
-                    )
-                )
+            # Testing claims with no matching test suite go straight to the refusal queue
+            if is_testing_skill and not has_code_blame and not has_certificate:
+                where = repo_label if in_scope else ", ".join(self._claim_repos(claim)) or repo_label
+                if not in_scope:
+                    reason = f"Listed on resume, but the linked repository ({where}) was not among the analysed repositories."
+                elif ev_skill is not None and ev_skill.total_lines > 0:
+                    reason = (f"Matching test files exist in {where}, but the candidate authored only "
+                              f"{ev_skill.lines_authored} of {ev_skill.total_lines} test lines.")
+                else:
+                    reason = f"Listed on resume, but zero matching test files or assertions found in {where}."
+                refuse(skill_name, RefusalItem(
+                    claim=skill_name,
+                    verdict=VerdictEnum.CLAIMED_ONLY,
+                    reason=reason,
+                    evidence_found=f"Scanned {signals.test_file_count} test files; frameworks found: {', '.join(signals.test_frameworks) or 'none'}.",
+                    suggested_remedy=f"Add a {skill_name} suite with real assertions to {where}" + ("" if in_scope else ", and include that repository in the audit") + "."
+                ), "EVALUATE_SKILL", "RULE_ZERO_TESTS_FOUND")
+                plan_skills.append((skill_name, f"Add {skill_name} tests to {where}", where))
                 continue
 
             # Determine 4-state verdict
-            if has_code_blame and evidence_doc.candidate_authorship_pct >= 70.0 and evidence_doc.active_months >= 3:
+            months_ok = evidence_doc.active_months >= MIN_MONTHS_FOR_VERIFIED
+            if has_code_blame and skill_pct >= MIN_AUTHORSHIP_FOR_VERIFIED and months_ok:
                 verdict = VerdictEnum.VERIFIED
-                level = "Advanced" if ev_skill.lines_authored > 2000 else "Intermediate"
+                level = "Advanced" if ev_skill and ev_skill.lines_authored > 2000 else "Intermediate"
             elif has_code_blame:
                 verdict = VerdictEnum.PARTIALLY_SUPPORTED
                 level = "Intermediate"
@@ -168,100 +177,61 @@ class FourStateVerifier:
                 verdict = VerdictEnum.CLAIMED_ONLY
                 level = "Beginner"
 
-            # Check if contradicted by fork with zero lines or commit laundering
-            if evidence_doc.signals.commit_laundering_detected:
+            # Contradicted by commit laundering or by a fork the candidate barely touched
+            if signals.commit_laundering_detected:
                 verdict = VerdictEnum.CONTRADICTED
-                if not any("Commit Laundering" in r.reason for r in refusals_out):
-                    audit_tracer.record(
-                        step="COMMIT_LAUNDERING_CHECK",
-                        target=skill_name,
-                        rule_applied="RULE_COMMIT_LAUNDERING_DUMP",
-                        verdict_reached="CONTRADICTED"
-                    )
-                    refusals_out.append(
-                        RefusalItem(
-                            claim=f"Iterative development history in {skill_name}",
-                            verdict=VerdictEnum.CONTRADICTED,
-                            reason="Commit Laundering Detected: Bulk initial upload without iterative commit history.",
-                            evidence_found=f"Initial commit accounts for >80% of lines across {evidence_doc.signals.commit_count} total commit(s).",
-                            suggested_remedy="Publish repositories demonstrating continuous incremental commits showing natural feature development."
-                        )
-                    )
+                if not any("Commit Laundering" in r.reason for _, r in refusals):
+                    refuse(skill_name, RefusalItem(
+                        claim=f"Iterative development history in {skill_name}",
+                        verdict=VerdictEnum.CONTRADICTED,
+                        reason="Commit Laundering Detected: Bulk initial upload without iterative commit history.",
+                        evidence_found=f"Initial commit accounts for >80% of lines across {signals.commit_count} total commit(s).",
+                        suggested_remedy="Publish repositories demonstrating continuous incremental commits showing natural feature development."
+                    ), "COMMIT_LAUNDERING_CHECK", "RULE_COMMIT_LAUNDERING_DUMP")
             elif evidence_doc.is_fork and evidence_doc.candidate_authorship_pct < 10.0:
                 verdict = VerdictEnum.CONTRADICTED
-                if not any("template fork" in r.reason.lower() for r in refusals_out):
-                    audit_tracer.record(
-                        step="FORK_CONTRADICTION_CHECK",
-                        target=skill_name,
-                        rule_applied="RULE_FORK_LOW_AUTHORSHIP",
-                        verdict_reached="CONTRADICTED"
-                    )
-                    refusals_out.append(
-                        RefusalItem(
-                            claim=f"Authentic repository development in {skill_name}",
-                            verdict=VerdictEnum.CONTRADICTED,
-                            reason=f"Repository is a template fork where candidate authored only {round(evidence_doc.candidate_authorship_pct, 1)}% of lines.",
-                            evidence_found=f"Forked upstream commit tree with negligible ({round(evidence_doc.candidate_authorship_pct, 1)}%) candidate authorship.",
-                            suggested_remedy="Provide original repositories or feature branches with authored commit history."
-                        )
-                    )
+                if not any("template fork" in r.reason.lower() and r.claim.startswith("Authentic") for _, r in refusals):
+                    pct = round(evidence_doc.candidate_authorship_pct, 1)
+                    refuse(skill_name, RefusalItem(
+                        claim=f"Authentic repository development in {skill_name}",
+                        verdict=VerdictEnum.CONTRADICTED,
+                        reason=f"Repository is a template fork where candidate authored only {pct}% of lines.",
+                        evidence_found=f"Forked upstream commit tree with negligible ({pct}%) candidate authorship.",
+                        suggested_remedy="Provide original repositories or feature branches with authored commit history."
+                    ), "FORK_CONTRADICTION_CHECK", "RULE_FORK_LOW_AUTHORSHIP")
 
             evidence_score, ev_reason = self.scoring.calculate_evidence_score(
                 has_deployed_or_pr=has_deployed_or_pr,
-                has_tests=has_tests,
+                has_tests=has_tests and has_code_blame,
                 has_code_blame=has_code_blame,
                 has_certificate=has_certificate
             )
 
             if verdict == VerdictEnum.CONTRADICTED:
                 evidence_score = 1
-                final_points = 10
+                final_points = CONTRADICTED_POINTS
             elif verdict == VerdictEnum.CLAIMED_ONLY:
-                evidence_score = 2
-                final_points = self.scoring.calculate_skill_points(evidence_score, "D")
+                evidence_score = CLAIMED_ONLY_EVIDENCE
+                final_points = self.scoring.calculate_skill_points(evidence_score, CLAIMED_ONLY_GRADE)
             else:
                 final_points = self.scoring.calculate_skill_points(evidence_score, grade)
 
-            signals_list: List[str] = []
             snippet_str = None
             code_preview = None
             if ev_skill and ev_skill.sample_snippet:
                 snippet_str = f"{ev_skill.sample_snippet.file}:L{ev_skill.sample_snippet.lines}"
                 code_preview = ev_skill.sample_snippet.code_preview
 
-            if has_code_blame:
-                signals_list.append(f"Used in own commits for {evidence_doc.active_months} months ({round(evidence_doc.candidate_authorship_pct, 1)}% authorship)")
-            if has_tests:
-                signals_list.append(f"{evidence_doc.signals.test_framework or 'Unit'} tests found ({evidence_doc.signals.test_file_count} test files)")
-            if evidence_doc.signals.has_error_handling:
-                signals_list.append("Error handling in core API routes verified")
-            if has_certificate:
-                signals_list.append("External certification credential verified")
-            if not signals_list:
-                signals_list.append("No active repository commits or tests found")
+            signals_list = self._signals_for(skill_name, ev_skill, skill_pct, has_code_blame, has_tests,
+                                             has_deployed_or_pr, has_certificate, in_scope, claim, evidence_doc)
 
-            # Learning plan recommendation if not fully verified
             if verdict == VerdictEnum.PARTIALLY_SUPPORTED:
                 if not has_code_blame:
-                    learning_plan.append(
-                        LearningPlanItem(
-                            action=f"Create a production repository demonstrating {skill_name} with test suite",
-                            skill=skill_name,
-                            potential_impact=f"+8% role match",
-                            target_score_delta=8,
-                            repo_context=evidence_doc.repo_url
-                        )
-                    )
+                    plan_skills.append((skill_name, f"Create a public repository demonstrating {skill_name} with a test suite", evidence_doc.repo_url))
+                elif not months_ok or skill_pct < MIN_AUTHORSHIP_FOR_VERIFIED:
+                    plan_skills.append((skill_name, f"Keep committing {skill_name} work over at least {MIN_MONTHS_FOR_VERIFIED} months", evidence_doc.repo_url))
             elif verdict == VerdictEnum.CLAIMED_ONLY:
-                learning_plan.append(
-                    LearningPlanItem(
-                        action=f"Build and commit an open-source project showing {skill_name} in action",
-                        skill=skill_name,
-                        potential_impact=f"+12% role match",
-                        target_score_delta=12,
-                        repo_context=evidence_doc.repo_url
-                    )
-                )
+                plan_skills.append((skill_name, f"Build and commit an open-source project showing {skill_name} in action", evidence_doc.repo_url))
 
             audit_tracer.record(
                 step="SCORE_SKILL",
@@ -281,40 +251,108 @@ class FourStateVerifier:
                     final_points=final_points,
                     proof_snippet=snippet_str,
                     sample_code=code_preview,
-                    authorship_pct=evidence_doc.candidate_authorship_pct if has_code_blame else None,
+                    authorship_pct=skill_pct if has_code_blame else None,
                     files_count=ev_skill.files_count if ev_skill else 0,
                     signals=signals_list,
                     reasoning=ev_reason
                 )
             )
 
-            total_points += final_points
-            max_possible_points += 100
+        refusal_items = [r for _, r in refusals]
+        overall_score = self.scoring.overall_score([s.final_points for s in skills_out])
+        role_match_pct = self.scoring.role_match_pct([s.verdict.value for s in skills_out], len(refusal_items))
 
-        overall_score = round(total_points / max(1, len(skills_out))) if skills_out else 0
+        learning_plan = self._learning_plan(plan_skills, skills_out, refusals, role_match_pct)
+        return skills_out, refusal_items, learning_plan, role_match_pct, overall_score
 
-        # Calculate Role Match %
-        # Verified skills carry full weight (100), Partial (55), minus bounded refusal penalties
-        if skills_out:
-            verified_count = sum(1 for s in skills_out if s.verdict == VerdictEnum.VERIFIED)
-            partial_count = sum(1 for s in skills_out if s.verdict == VerdictEnum.PARTIALLY_SUPPORTED)
-            raw_match = ((verified_count * 100) + (partial_count * 55)) / len(skills_out)
-            penalty = (len(refusals_out) * 7)
-            role_match_pct = max(10, min(95, round(raw_match - penalty)))
+    # --- Helpers -------------------------------------------------------------------------------
 
-            # Alignment with blueprint benchmark persona
-            if "priya" in claims_doc.candidate_name.lower() and len(refusals_out) == 2:
-                role_match_pct = 72
-                overall_score = 62
-        else:
-            role_match_pct = 10
+    @staticmethod
+    def _claim_repos(claim: ClaimItem) -> List[str]:
+        return [l for l in claim.evidence_links if any(h in l.lower() for h in CODE_HOSTS)]
 
-        # Ensure learning plan is deduplicated
-        unique_plans = []
-        seen_actions = set()
-        for lp in learning_plan:
-            if lp.action not in seen_actions:
-                seen_actions.add(lp.action)
-                unique_plans.append(lp)
+    def _in_scope(self, claim: ClaimItem, analysed_repos: set) -> bool:
+        """A claim that links specific repositories can only be backed by evidence from those repositories."""
+        linked = {k for k in (_repo_key(u) for u in self._claim_repos(claim)) if k}
+        return not linked or not analysed_repos or bool(linked & analysed_repos)
 
-        return skills_out, refusals_out, unique_plans, role_match_pct, overall_score
+    @staticmethod
+    def _find_evidence(skill_name: str, evidence_doc: EvidenceDocument) -> Optional[SkillEvidence]:
+        for key, ev in evidence_doc.skills_detected.items():
+            if normalize_skill(key).lower() == skill_name.lower():
+                return ev
+        return None
+
+    @staticmethod
+    def _has_tests_for(skill_name: str, ev_skill: Optional[SkillEvidence], evidence_doc: EvidenceDocument) -> bool:
+        """Test credit needs tests in the skill's ecosystem that the candidate actually wrote."""
+        signals = evidence_doc.signals
+        if not signals.has_tests or signals.test_file_count == 0:
+            return False
+        if skill_name in TESTING_SKILL_FRAMEWORKS:
+            return ev_skill is not None
+        frameworks = signals.test_frameworks or ([signals.test_framework] if signals.test_framework else [])
+        ecosystem = ecosystem_for(skill_name)
+        if ecosystem is None:
+            return False
+        for fw in frameworks:
+            if TEST_FRAMEWORK_ECOSYSTEM.get(fw) != ecosystem:
+                continue
+            testing_skill = next((t for t, fws in TESTING_SKILL_FRAMEWORKS.items() if fw in fws), None)
+            if testing_skill is None:
+                return True  # framework without per-file evidence (e.g. go test): repo-level signal
+            test_ev = FourStateVerifier._find_evidence(testing_skill, evidence_doc)
+            if test_ev is not None and test_ev.lines_authored >= min_lines_for(testing_skill):
+                return True
+        return False
+
+    @staticmethod
+    def _signals_for(skill_name, ev_skill, skill_pct, has_code_blame, has_tests, has_deployed_or_pr,
+                     has_certificate, in_scope, claim, evidence_doc) -> List[str]:
+        out: List[str] = []
+        if not in_scope:
+            out.append(f"Linked repository ({', '.join(FourStateVerifier._claim_repos(claim))}) was not analysed")
+        if skill_name == "Git" and has_code_blame:
+            out.append(f"{evidence_doc.signals.candidate_commit_count} commits authored over {evidence_doc.active_months} months")
+        elif has_code_blame and ev_skill:
+            out.append(f"Authored {ev_skill.lines_authored} lines across {ev_skill.files_count} files ({round(skill_pct, 1)}% of lines in those files)")
+            if ev_skill.route_definitions:
+                out.append(f"{ev_skill.route_definitions} API route definitions found by static analysis")
+        elif ev_skill and ev_skill.total_lines > 0:
+            out.append(f"Found in repository, but the candidate authored {ev_skill.lines_authored} of {ev_skill.total_lines} lines (needs {min_lines_for(skill_name)}+ authored lines and {int(MIN_AUTHORSHIP_FOR_CODE)}%+ share)")
+        if has_tests and has_code_blame:
+            out.append(f"Matching tests found ({', '.join(evidence_doc.signals.test_frameworks) or evidence_doc.signals.test_framework})")
+        if has_deployed_or_pr:
+            if evidence_doc.signals.deployed_url:
+                out.append(f"Deployment listed on the repository: {evidence_doc.signals.deployed_url}")
+            if evidence_doc.signals.merged_prs:
+                out.append(f"{evidence_doc.signals.merged_prs} merged pull request(s) by the candidate")
+        if has_code_blame and evidence_doc.signals.has_error_handling and claim.category in ("language", "framework"):
+            out.append("Error handling patterns found in the repository")
+        if has_certificate:
+            out.append("Certificate link provided (not code evidence)")
+        if not out:
+            out.append("No active repository commits or tests found")
+        return out
+
+    def _learning_plan(self, plan_skills, skills_out: List[SkillPassportItem],
+                       refusals: List[Tuple[Optional[str], RefusalItem]], current_match: int) -> List[LearningPlanItem]:
+        """Each item's impact is computed by re-running the role-match formula with that skill fixed."""
+        items: List[LearningPlanItem] = []
+        seen = set()
+        for skill, action, repo in plan_skills:
+            if action in seen:
+                continue
+            seen.add(action)
+            verdicts = [s.verdict.value for s in skills_out if s.name != skill] + ["VERIFIED"]
+            remaining_refusals = sum(1 for owner, _ in refusals if owner != skill)
+            new_match = self.scoring.role_match_pct(verdicts, remaining_refusals)
+            delta = max(0, new_match - current_match)
+            items.append(LearningPlanItem(
+                action=action,
+                skill=skill,
+                potential_impact=f"+{delta}% role match ({current_match}% → {new_match}%)",
+                target_score_delta=delta,
+                repo_context=repo
+            ))
+        return items

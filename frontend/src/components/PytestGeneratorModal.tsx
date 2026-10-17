@@ -6,13 +6,15 @@ interface PytestGeneratorModalProps {
   onClose: () => void;
   candidateName: string;
   repoContext?: string;
+  impactPct?: number;
 }
 
 export const PytestGeneratorModal: React.FC<PytestGeneratorModalProps> = ({
   isOpen,
   onClose,
   candidateName,
-  repoContext = "https://github.com/jordan/task-manager"
+  repoContext = "https://github.com/jordan/task-manager",
+  impactPct
 }) => {
   if (!isOpen) return null;
 
@@ -80,7 +82,7 @@ def test_handle_invalid_task_id(invalid_id):
                   Starter Pytest Suite Generator
                 </h3>
                 <span className="text-[10px] font-mono text-[#50d8e9] bg-[#50d8e9]/10 px-2 py-0.5 rounded border border-[#50d8e9]/20 font-bold">
-                  +9% MATCH IMPACT
+                  {impactPct !== undefined ? `+${impactPct}% MATCH IMPACT` : 'MATCH IMPACT'}
                 </span>
               </div>
               <p className="text-[11px] font-mono text-[#9A9DA3]">

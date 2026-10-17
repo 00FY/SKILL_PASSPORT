@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional
 from ..schemas import QuizQuestion, QuizResult
 from .scoring_engine import DeterministicScoringEngine, GRADE_WEIGHTS
+from ..skills import normalize_skill
 
 SAMPLE_QUIZZES: Dict[str, List[QuizQuestion]] = {
     "Python": [
@@ -244,11 +245,8 @@ SAMPLE_QUIZZES: Dict[str, List[QuizQuestion]] = {
 
 class QuestionBankEngine:
     def get_questions_for_skill(self, skill: str) -> List[QuizQuestion]:
-        # Return matched skill quiz, or fallback to Python questions if not directly found
-        for k in SAMPLE_QUIZZES:
-            if k.lower() in skill.lower() or skill.lower() in k.lower():
-                return SAMPLE_QUIZZES[k]
-        return SAMPLE_QUIZZES["Python"]
+        # Exact skill match only: a Python quiz must never grade a Java (or any other) claim
+        return SAMPLE_QUIZZES.get(normalize_skill(skill), [])
 
     def evaluate_quiz(self, skill: str, answers: Dict[str, int]) -> QuizResult:
         questions = self.get_questions_for_skill(skill)

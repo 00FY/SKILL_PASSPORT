@@ -45,6 +45,7 @@ def test_four_state_verifier_verdicts():
         first_commit="2024-01-10",
         last_commit="2025-03-15",
         active_months=14,
+        unique_contributors=1,
         skills_detected={
             "Python": SkillEvidence(
                 lines_authored=2450,

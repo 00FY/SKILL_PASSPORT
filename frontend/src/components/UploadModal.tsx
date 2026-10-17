@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Upload, Github, FileText, Loader2, CheckCircle2, Sparkles, Terminal } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { X, Upload, Github, FileText, Loader2, Sparkles, Terminal, AlertTriangle, UserCheck } from 'lucide-react';
 import { PassportDocument } from '../data/mockData';
 
 interface UploadModalProps {
@@ -8,64 +8,116 @@ interface UploadModalProps {
   onCustomVerified: (passport: PassportDocument) => void;
 }
 
+const MAX_REPOS = 5;
+
+const splitList = (value: string): string[] =>
+  value.split(/[\n,]+/).map(v => v.trim()).filter(Boolean);
+
+const errorMessage = async (res: Response): Promise<string> => {
+  try {
+    const body = await res.json();
+    if (typeof body.detail === 'string') return body.detail;
+    if (Array.isArray(body.detail)) return body.detail.map((d: { msg?: string }) => d.msg).join('; ');
+  } catch {
+    // fall through
+  }
+  return `Request failed with status ${res.status}.`;
+};
+
 export const UploadModal: React.FC<UploadModalProps> = ({
   isOpen,
   onClose,
   onCustomVerified
 }) => {
+  const [resumeText, setResumeText] = useState<string>('');
+  const [repoUrls, setRepoUrls] = useState<string>('');
+  const [gitIdentities, setGitIdentities] = useState<string>('');
+  const [candidateName, setCandidateName] = useState<string>('');
+  const [fileName, setFileName] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [stepMessage, setStepMessage] = useState<string>('');
+  const [error, setError] = useState<string>('');
+  const [notices, setNotices] = useState<string[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+
   if (!isOpen) return null;
 
-  const [resumeText, setResumeText] = useState<string>(
-    "Priya S. - Full Stack & Backend Engineer\n" +
-    "Links: https://github.com/priya/api-service, https://coursera.org/verify/XYZ123\n\n" +
-    "Summary:\n" +
-    "3 years of experience in Python and FastAPI building distributed APIs.\n" +
-    "12 months of Docker experience containerizing deployments.\n" +
-    "Led a 5-person team on ShopAPI."
-  );
-  const [githubUrl, setGithubUrl] = useState<string>("https://github.com/priya/api-service");
-  const [candidateName, setCandidateName] = useState<string>("Priya S.");
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [stepMessage, setStepMessage] = useState<string>("");
+  const handleFile = async (file: File) => {
+    setError('');
+    setNotices([]);
+    setIsLoading(true);
+    setStepMessage(`Extracting text from ${file.name}...`);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch('/api/parse-resume', { method: 'POST', body: form });
+      if (!res.ok) {
+        setError(await errorMessage(res));
+        return;
+      }
+      const data = await res.json();
+      setFileName(data.filename);
+      setResumeText(data.text);
+      if (!repoUrls.trim() && data.repo_urls?.length) {
+        setRepoUrls(data.repo_urls.join('\n'));
+      }
+      setNotices(data.warnings || []);
+    } catch {
+      setError('Could not reach the backend. Is the API running on port 8000?');
+    } finally {
+      setIsLoading(false);
+      setStepMessage('');
+    }
+  };
 
   const handleRunPipeline = async () => {
+    setError('');
+    const repos = splitList(repoUrls);
+    if (!resumeText.trim()) {
+      setError('Upload a resume or paste its text first.');
+      return;
+    }
+    if (repos.length > MAX_REPOS) {
+      setError(`At most ${MAX_REPOS} repositories can be analysed at once.`);
+      return;
+    }
+
     setIsLoading(true);
-    setStepMessage("Sanitizing text & checking for prompt injection...");
+    setStepMessage(
+      repos.length
+        ? `Cloning ${repos.length} repositor${repos.length === 1 ? 'y' : 'ies'} and running git blame, static analysis and test detection...`
+        : 'No repository entered: analysing repositories linked in the resume...'
+    );
 
     try {
-      setStepMessage("Executing 4-Module Pipeline: Prompt Defense -> Claim Extraction -> Git Blame -> Rubric Signer...");
-      const analyzeRes = await fetch('/api/analyze', {
+      const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          candidate_name: candidateName,
+          candidate_name: candidateName.trim() || undefined,
           resume_text: resumeText,
-          repo_url: githubUrl
+          repo_urls: repos,
+          git_identities: splitList(gitIdentities)
         })
       });
 
-      if (analyzeRes.ok) {
-        const passport = await analyzeRes.json();
-        onCustomVerified(passport);
-        onClose();
+      if (!res.ok) {
+        setError(await errorMessage(res));
         return;
       }
-
-      // Fallback to demo persona if local Git repo unavailable
-      const demoRes = await fetch('/api/demo/priya');
-      if (demoRes.ok) {
-        const passport = await demoRes.json();
-        onCustomVerified(passport);
-        onClose();
-      }
-    } catch (err) {
-      console.warn("Using offline demo pipeline fallback", err);
+      const passport = await res.json();
+      onCustomVerified(passport);
       onClose();
+    } catch {
+      setError('Could not reach the backend. Is the API running on port 8000?');
     } finally {
       setIsLoading(false);
-      setStepMessage("");
+      setStepMessage('');
     }
   };
+
+  const inputClass = "w-full px-3 py-2 rounded bg-[#0e0e0f] border border-[#1B1C1E] text-[#e5e2e3] text-xs focus:outline-none focus:border-[#5E6BFF]";
+  const labelClass = "block text-[10px] font-bold uppercase tracking-wider text-[#9A9DA3] mb-1.5";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
@@ -81,7 +133,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                 Audit Terminal & Repository Crawler
               </h3>
               <p className="text-[11px] font-mono text-[#9A9DA3]">
-                Live 4-person decoupled verification pipeline
+                Resume claims verified against public repository evidence
               </p>
             </div>
           </div>
@@ -95,42 +147,81 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
         {/* Content */}
         <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto font-mono text-xs">
+          {/* Resume file */}
+          <div>
+            <label className={labelClass}>Resume File</label>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".pdf,.docx,.txt,.md"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleFile(f);
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              disabled={isLoading}
+              className="w-full flex items-center justify-center gap-2 px-3 py-3 rounded border border-dashed border-[#2a2a2b] hover:border-[#5E6BFF] text-[#9A9DA3] hover:text-[#e5e2e3] transition-colors disabled:opacity-50"
+            >
+              <FileText className="w-4 h-4" />
+              <span>{fileName ? `Loaded ${fileName} - click to replace` : 'Upload PDF, DOCX or TXT (max 5 MB)'}</span>
+            </button>
+          </div>
+
           {/* Candidate Name */}
           <div>
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-[#9A9DA3] mb-1.5">
-              Candidate Name
-            </label>
+            <label className={labelClass}>Candidate Name (optional)</label>
             <input
               type="text"
               value={candidateName}
               onChange={(e) => setCandidateName(e.target.value)}
-              className="w-full px-3 py-2 rounded bg-[#0e0e0f] border border-[#1B1C1E] text-[#e5e2e3] text-xs focus:outline-none focus:border-[#5E6BFF]"
-              placeholder="e.g. Priya Sharma"
+              className={inputClass}
+              placeholder="Detected from the resume if left empty"
             />
           </div>
 
-          {/* GitHub Repo URL */}
+          {/* Repositories */}
           <div>
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-[#9A9DA3] mb-1.5">
-              Candidate GitHub Repository
-            </label>
+            <label className={labelClass}>Public Repositories (one per line, up to {MAX_REPOS})</label>
             <div className="relative">
               <Github className="w-4 h-4 text-[#9A9DA3] absolute left-3 top-2.5" />
-              <input
-                type="text"
-                value={githubUrl}
-                onChange={(e) => setGithubUrl(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 rounded bg-[#0e0e0f] border border-[#1B1C1E] text-[#e5e2e3] text-xs focus:outline-none focus:border-[#5E6BFF]"
-                placeholder="https://github.com/user/repository"
+              <textarea
+                rows={2}
+                value={repoUrls}
+                onChange={(e) => setRepoUrls(e.target.value)}
+                className={`${inputClass} pl-9`}
+                placeholder={"https://github.com/user/project\nLeave empty to use repository links from the resume"}
               />
             </div>
+          </div>
+
+          {/* Git identities */}
+          <div>
+            <label className={labelClass}>Git Identities</label>
+            <div className="relative">
+              <UserCheck className="w-4 h-4 text-[#9A9DA3] absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={gitIdentities}
+                onChange={(e) => setGitIdentities(e.target.value)}
+                className={`${inputClass} pl-9`}
+                placeholder="you@example.com, your-github-username"
+              />
+            </div>
+            <p className="mt-1 text-[10px] text-[#686b72]">
+              Emails or usernames the candidate commits with. The repository owner's username is included automatically.
+            </p>
           </div>
 
           {/* Resume Text */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-[10px] font-bold uppercase tracking-wider text-[#9A9DA3]">
-                Resume Declarations & Claims
+                Resume Text (review or paste)
               </label>
               <button
                 type="button"
@@ -149,10 +240,23 @@ export const UploadModal: React.FC<UploadModalProps> = ({
               rows={6}
               value={resumeText}
               onChange={(e) => setResumeText(e.target.value)}
-              className="w-full p-3 rounded bg-[#0e0e0f] border border-[#1B1C1E] text-[#e5e2e3] text-xs focus:outline-none focus:border-[#5E6BFF] leading-relaxed"
-              placeholder="Paste raw resume or candidate claims text here..."
+              className={`${inputClass} p-3 leading-relaxed`}
+              placeholder="Upload a file above or paste raw resume text here..."
             />
           </div>
+
+          {notices.length > 0 && (
+            <div className="p-3 rounded bg-[#1d1a14] border border-[#ffb689]/30 text-[11px] text-[#ffb689] space-y-1">
+              {notices.map((n, i) => <p key={i}>{n}</p>)}
+            </div>
+          )}
+
+          {error && (
+            <div className="p-3 rounded bg-[#1d1313] border border-[#ffb4ab]/40 flex items-start gap-2.5 text-[11px] text-[#ffb4ab]">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
 
           {/* Pipeline progress */}
           {isLoading && (

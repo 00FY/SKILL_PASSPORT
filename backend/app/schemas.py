@@ -41,6 +41,8 @@ class SampleSnippet(BaseModel):
 
 class SkillEvidence(BaseModel):
     lines_authored: int = 0
+    total_lines: int = 0
+    authorship_pct: Optional[float] = Field(default=None, description="Candidate share of lines in the files backing this skill")
     files_count: int = 0
     sample_snippet: Optional[SampleSnippet] = None
     imports_found: List[str] = Field(default_factory=list)
@@ -49,6 +51,7 @@ class SkillEvidence(BaseModel):
 class QualitySignals(BaseModel):
     has_tests: bool = False
     test_framework: Optional[str] = None
+    test_frameworks: List[str] = Field(default_factory=list)
     test_file_count: int = 0
     test_assertion_count: int = 0
     has_error_handling: bool = False
@@ -57,17 +60,30 @@ class QualitySignals(BaseModel):
     single_day_commit_dump: bool = False
     commit_laundering_detected: bool = False
     commit_count: int = 0
+    candidate_commit_count: int = 0
+
+class ExcludedRepo(BaseModel):
+    repo_url: str
+    reason: str
 
 class EvidenceDocument(BaseModel):
     repo_url: str
+    repo_urls: List[str] = Field(default_factory=list)
     is_fork: bool = False
     is_cloned_template: bool = False
     candidate_authorship_pct: float = 0.0
     first_commit: Optional[str] = None
     last_commit: Optional[str] = None
     active_months: int = 0
+    unique_contributors: Optional[int] = None
+    total_code_lines: int = 0
+    candidate_code_lines: int = 0
+    authors_found: List[str] = Field(default_factory=list, description="Top commit identities seen in the repo (helps fix identity mismatches)")
+    identities_used: List[str] = Field(default_factory=list)
     skills_detected: Dict[str, SkillEvidence] = Field(default_factory=dict)
     signals: QualitySignals = Field(default_factory=QualitySignals)
+    excluded_repos: List[ExcludedRepo] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
     raw_audit_notes: List[str] = Field(default_factory=list)
 
 # --- Module 3: Rubric, Verdicts & Passport ---
@@ -143,11 +159,13 @@ class PassportDocument(BaseModel):
     active_months: Optional[int] = 1
     total_commits: Optional[int] = 0
     repo_url: Optional[str] = None
+    repo_urls: List[str] = Field(default_factory=list)
     is_fork: Optional[bool] = False
     skills: List[SkillPassportItem] = Field(default_factory=list)
     refusal_panel: List[RefusalItem] = Field(default_factory=list)
     learning_plan: List[LearningPlanItem] = Field(default_factory=list)
     security_alerts: List[SecurityFlag] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
     tamper_proof_hash: str
     issued_at: str
     audit_log: Optional[RunAuditLog] = None
@@ -155,7 +173,7 @@ class PassportDocument(BaseModel):
 # --- What-If Simulator Schemas ---
 class SimulationRequest(BaseModel):
     base_passport: PassportDocument
-    toggles: Dict[str, bool]  # e.g., {"add_pytest_shopapi": True, "sustained_commits_python": True}
+    toggles: Dict[str, bool]  # add_pytest / add_tests, add_deploy / deployed_url, sustained_commits / author_more
 
 class SimulationResult(BaseModel):
     previous_score: int

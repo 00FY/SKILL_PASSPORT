@@ -1,4 +1,4 @@
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 GRADE_WEIGHTS = {
     "A": 10,
@@ -15,6 +15,15 @@ EVIDENCE_WEIGHTS = {
     "CERTIFICATE_ONLY": 4, # Verified external certificate
     "RESUME_ONLY": 2       # Claimed on resume only
 }
+
+# Role match weights per verdict and the per-refusal penalty
+VERDICT_MATCH_WEIGHTS = {"VERIFIED": 100, "PARTIALLY_SUPPORTED": 55}
+REFUSAL_PENALTY = 7
+
+# Fixed points for verdicts that don't use the evidence x grade product
+CONTRADICTED_POINTS = 10
+CLAIMED_ONLY_EVIDENCE = 2
+CLAIMED_ONLY_GRADE = "D"
 
 class DeterministicScoringEngine:
     """
@@ -34,7 +43,7 @@ class DeterministicScoringEngine:
         elif has_tests:
             return EVIDENCE_WEIGHTS["TESTS_VERIFIED"], "Unit test suite with passing assertions"
         elif has_code_blame:
-            return EVIDENCE_WEIGHTS["COMMITS_AUTHORED"], "Sustained git history with >70% line authorship"
+            return EVIDENCE_WEIGHTS["COMMITS_AUTHORED"], "Candidate-authored code in linked repositories"
         elif has_certificate:
             return EVIDENCE_WEIGHTS["CERTIFICATE_ONLY"], "Verified certification link without production repo"
         else:
@@ -58,3 +67,21 @@ class DeterministicScoringEngine:
             return "D"
         else:
             return "E"
+
+    @staticmethod
+    def overall_score(skill_points: List[int]) -> int:
+        """Overall Audit Score: mean of per-skill points (0-100)."""
+        return round(sum(skill_points) / len(skill_points)) if skill_points else 0
+
+    @staticmethod
+    def role_match_pct(verdicts: List[str], refusal_count: int) -> int:
+        """
+        Role Match % = (100 x VERIFIED + 55 x PARTIALLY_SUPPORTED) / scored skills
+                       - 7 x refusals, clipped to [10, 95].
+        """
+        if not verdicts:
+            return 10
+        verified = sum(1 for v in verdicts if v == "VERIFIED")
+        partial = sum(1 for v in verdicts if v == "PARTIALLY_SUPPORTED")
+        raw = (verified * VERDICT_MATCH_WEIGHTS["VERIFIED"] + partial * VERDICT_MATCH_WEIGHTS["PARTIALLY_SUPPORTED"]) / len(verdicts)
+        return max(10, min(95, round(raw - REFUSAL_PENALTY * refusal_count)))
