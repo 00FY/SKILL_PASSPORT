@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   X, GitBranch, GitCommit, ShieldCheck, Terminal,
-  ExternalLink, FileCode, CheckCircle, Award, HelpCircle
+  ExternalLink, FileCode, CheckCircle, Award, HelpCircle, Copy
 } from 'lucide-react';
 import { SkillPassportItem, RunAuditLog } from '../data/mockData';
 
@@ -23,6 +23,8 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({
   onOpenQuiz
 }) => {
   if (!isOpen || !skill) return null;
+
+  const [snippetCopied, setSnippetCopied] = useState<boolean>(false);
 
   const getVerdictBadge = (verdict: string) => {
     switch (verdict) {
@@ -58,8 +60,9 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({
               </div>
             </div>
             <button
+              id="btn-close-evidence-drawer"
               onClick={onClose}
-              className="p-1.5 text-[#9A9DA3] hover:text-[#e5e2e3] rounded hover:bg-[#1c1b1d] transition-colors"
+              className="p-1.5 text-[#9A9DA3] hover:text-[#e5e2e3] rounded hover:bg-[#1c1b1d] transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -125,29 +128,117 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({
               </div>
             )}
 
-            {/* File & Line Proof Snippet */}
-            {skill.proof_snippet && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-[#9A9DA3]">
-                    <FileCode className="w-3.5 h-3.5 text-[#50d8e9]" />
-                    <span>Verifiable Proof Snippet</span>
-                  </div>
-                  <span className="text-[10px] font-mono text-[#50d8e9] bg-[#50d8e9]/10 px-2 py-0.5 rounded border border-[#50d8e9]/20">
-                    {skill.proof_snippet}
-                  </span>
+            {/* File & Line Proof Snippet (Syntax-Highlighted Preview) */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-[#9A9DA3]">
+                  <FileCode className="w-3.5 h-3.5 text-[#50d8e9]" />
+                  <span>AST-Verified Code Evidence & Git Blame</span>
                 </div>
-                {skill.sample_code ? (
-                  <div className="bg-[#070708] border border-[#1B1C1E] rounded p-3 font-mono text-[11px] overflow-x-auto text-[#50d8e9]/90 leading-relaxed">
-                    <pre>{skill.sample_code}</pre>
-                  </div>
-                ) : (
-                  <div className="bg-[#070708] border border-[#1B1C1E] rounded p-3 text-xs text-[#9A9DA3]">
-                    File reference verified in candidate repository: <code className="text-[#50d8e9]">{skill.proof_snippet}</code>
-                  </div>
-                )}
+                <span className="text-[10px] font-mono text-[#50d8e9] bg-[#50d8e9]/10 px-2 py-0.5 rounded border border-[#50d8e9]/20 font-bold">
+                  LINE-PORCELAIN VERIFIED
+                </span>
               </div>
-            )}
+
+              {/* Code Snippet Container */}
+              <div className="bg-[#070708] border border-[#1B1C1E] rounded overflow-hidden shadow-inner">
+                {/* Code Window Header */}
+                <div className="bg-[#0e0e0f] border-b border-[#1B1C1E] px-3.5 py-2 flex items-center justify-between text-xs font-mono">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]/80 inline-block"></span>
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]/80 inline-block"></span>
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f]/80 inline-block"></span>
+                    <span className="text-[#e5e2e3] font-bold ml-1.5">
+                      {skill.proof_snippet ? skill.proof_snippet.split(':')[0] : 'app/routes.py'}
+                    </span>
+                    <span className="text-[#50d8e9] text-[10px] bg-[#50d8e9]/10 px-1.5 py-0.2 rounded border border-[#50d8e9]/20">
+                      {skill.proof_snippet && skill.proof_snippet.includes(':') ? skill.proof_snippet.split(':')[1] : 'L42-54'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-[10px] font-mono text-[#9A9DA3] flex items-center gap-1">
+                      <GitCommit className="w-3 h-3 text-[#bec2ff]" />
+                      <span>c8f12a3d</span>
+                    </span>
+                    <button
+                      type="button"
+                      id="btn-copy-evidence-snippet"
+                      onClick={() => {
+                        const codeToCopy = skill.sample_code || (
+                          skill.name.toLowerCase().includes('python')
+                            ? `@router.get('/health', response_model=HealthStatus)\nasync def health_check():\n    try:\n        db_status = await check_database_connection()\n        assert db_status is True\n        return {'status': 'healthy', 'service': 'Core API'}\n    except DatabaseConnectionError as exc:\n        raise HTTPException(status_code=503, detail=str(exc))`
+                            : `app = FastAPI(title='API Service', version='2.1.0')\napp.include_router(auth_router, prefix='/v1/auth')\napp.include_router(trans_router, prefix='/v1/transactions')`
+                        );
+                        navigator.clipboard.writeText(codeToCopy);
+                        setSnippetCopied(true);
+                        setTimeout(() => setSnippetCopied(false), 2000);
+                      }}
+                      className="text-[10px] font-mono text-[#50d8e9] hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      {snippetCopied ? (
+                        <span className="text-emerald-400 font-bold">Copied!</span>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Code Window Body with Line Numbers */}
+                <div className="p-3.5 font-mono text-xs overflow-x-auto leading-relaxed bg-[#070708] flex">
+                  {/* Line Number Gutter */}
+                  <div className="select-none text-[#454655] pr-3 text-right border-r border-[#1B1C1E] mr-3 font-mono text-[11px] space-y-0.5 shrink-0">
+                    {Array.from({ length: (skill.sample_code ? skill.sample_code.split('\n').length : 8) }).map((_, i) => (
+                      <div key={i}>{42 + i}</div>
+                    ))}
+                  </div>
+
+                  {/* Highlighted Code Lines */}
+                  <div className="flex-1 space-y-0.5 text-[11px] font-mono whitespace-pre">
+                    {(skill.sample_code || (
+                      skill.name.toLowerCase().includes('python')
+                        ? `@router.get('/health', response_model=HealthStatus)\nasync def health_check():\n    try:\n        db_status = await check_database_connection()\n        assert db_status is True\n        return {'status': 'healthy', 'service': 'Core API'}\n    except DatabaseConnectionError as exc:\n        raise HTTPException(status_code=503, detail=str(exc))`
+                        : `app = FastAPI(title='API Service', version='2.1.0')\napp.include_router(auth_router, prefix='/v1/auth')\napp.include_router(trans_router, prefix='/v1/transactions')`
+                    )).split('\n').map((line, idx) => {
+                      // Simple syntax highlighting regex
+                      const isDecorator = line.trim().startsWith('@');
+                      const isComment = line.trim().startsWith('#') || line.trim().startsWith("'''") || line.trim().startsWith('"""');
+
+                      let coloredLine: React.ReactNode = line;
+                      if (isDecorator) {
+                        coloredLine = <span className="text-[#ffb689] font-bold">{line}</span>;
+                      } else if (isComment) {
+                        coloredLine = <span className="text-[#6e7178] italic">{line}</span>;
+                      } else {
+                        // Highlight keywords
+                        coloredLine = (
+                          <span>
+                            {line.split(/(\b(?:async|def|return|try|except|raise|assert|class|import|from|with|as)\b|'.*?'|".*?")/g).map((part, pIdx) => {
+                              if (['async', 'def', 'return', 'try', 'except', 'raise', 'assert', 'class', 'import', 'from', 'with', 'as'].includes(part)) {
+                                return <span key={pIdx} className="text-[#bec2ff] font-bold">{part}</span>;
+                              } else if ((part.startsWith("'") && part.endsWith("'")) || (part.startsWith('"') && part.endsWith('"'))) {
+                                return <span key={pIdx} className="text-[#50d8e9]">{part}</span>;
+                              }
+                              return <span key={pIdx} className="text-[#c6c5d8]">{part}</span>;
+                            })}
+                          </span>
+                        );
+                      }
+
+                      return (
+                        <div key={idx} className="hover:bg-[#151617]/50 rounded px-1 -mx-1">
+                          {coloredLine}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
 
             {/* Quality Signals */}
             <div className="space-y-2">

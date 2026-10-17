@@ -7,6 +7,7 @@ import { EvidenceDrawer } from './components/EvidenceDrawer';
 import { QuizModal } from './components/QuizModal';
 import { SecurityAlertModal } from './components/SecurityAlertModal';
 import { UploadModal } from './components/UploadModal';
+import { TamperVerifyModal } from './components/TamperVerifyModal';
 import {
   MOCK_PRIYA, MOCK_ALEX, MOCK_JORDAN, MOCK_REDTEAM,
   PassportDocument, SkillPassportItem
@@ -25,6 +26,7 @@ export const App: React.FC = () => {
   const [quizSkillName, setQuizSkillName] = useState<string | null>(null);
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState<boolean>(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
+  const [isTamperModalOpen, setIsTamperModalOpen] = useState<boolean>(false);
   const [signatureVerifiedNotice, setSignatureVerifiedNotice] = useState<boolean>(false);
 
   // Load persona from API with fallback
@@ -123,26 +125,7 @@ export const App: React.FC = () => {
   const [signatureNoticeDetails, setSignatureNoticeDetails] = useState<{ valid: boolean; reason: string } | null>(null);
 
   const handleVerifySignature = async () => {
-    try {
-      const res = await fetch('/api/verify-signature', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(passport)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSignatureNoticeDetails({ valid: data.valid, reason: data.reason });
-      } else {
-        setSignatureNoticeDetails({ valid: true, reason: "Cryptographic HMAC-SHA256 signature verified against canonical JSON." });
-      }
-    } catch {
-      setSignatureNoticeDetails({ valid: true, reason: "Cryptographic HMAC-SHA256 signature verified against canonical JSON." });
-    }
-    setSignatureVerifiedNotice(true);
-    setTimeout(() => {
-      setSignatureVerifiedNotice(false);
-      setSignatureNoticeDetails(null);
-    }, 4500);
+    setIsTamperModalOpen(true);
   };
 
   const handleSelectRefusalsTab = () => {
@@ -267,6 +250,13 @@ export const App: React.FC = () => {
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
         onCustomVerified={handleCustomVerified}
+      />
+
+      {/* Cryptographic Tamper & Verify Modal */}
+      <TamperVerifyModal
+        isOpen={isTamperModalOpen}
+        onClose={() => setIsTamperModalOpen(false)}
+        passport={passport}
       />
     </div>
   );

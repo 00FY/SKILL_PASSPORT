@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   CheckCircle2, AlertCircle, FileCode, GitBranch,
-  ExternalLink, ShieldCheck, Hash, Eye, Sparkles, Terminal, Activity
+  ExternalLink, ShieldCheck, Hash, Eye, Sparkles, Terminal, Activity,
+  Sliders, Search, X
 } from 'lucide-react';
 import { PassportDocument, SkillPassportItem } from '../data/mockData';
 import { MetricsRow } from './MetricsRow';
@@ -38,6 +39,98 @@ export const RecruiterView: React.FC<RecruiterViewProps> = ({
     tamper_proof_hash,
     audit_log
   } = passport;
+
+  // Module 4: Live Role / Job Description Re-Weighting State
+  const [selectedRolePreset, setSelectedRolePreset] = useState<string>('baseline');
+  const [customKeyword, setCustomKeyword] = useState<string>('');
+
+  const ROLE_PRESETS = [
+    {
+      id: 'baseline',
+      name: 'Applied Baseline',
+      desc: applied_role,
+      keywords: applied_role.toLowerCase().split(/[\s/()]+/).filter(Boolean),
+    },
+    {
+      id: 'backend',
+      name: 'Backend API Engineer (Python/FastAPI)',
+      desc: 'Python • FastAPI • Pytest • APIs',
+      keywords: ['python', 'fastapi', 'backend', 'api', 'pytest', 'sql', 'postgresql', 'rest'],
+    },
+    {
+      id: 'fullstack',
+      name: 'Full-Stack Engineer',
+      desc: 'React • TypeScript • FastAPI',
+      keywords: ['react', 'typescript', 'javascript', 'frontend', 'python', 'fastapi', 'tailwind', 'full-stack'],
+    },
+    {
+      id: 'devops',
+      name: 'DevOps / Cloud Engineer',
+      desc: 'Docker • Kubernetes • CI/CD',
+      keywords: ['docker', 'kubernetes', 'ci/cd', 'github actions', 'cloud', 'linux', 'devops', 'git'],
+    },
+  ];
+
+  // Active keywords determining card highlight & role match calculation
+  const activeKeywords = useMemo(() => {
+    if (customKeyword.trim()) {
+      return customKeyword
+        .toLowerCase()
+        .split(/[\s,]+/)
+        .map(k => k.trim())
+        .filter(k => k.length > 1);
+    }
+    const preset = ROLE_PRESETS.find(p => p.id === selectedRolePreset);
+    if (!preset || preset.id === 'baseline') {
+      return [];
+    }
+    return preset.keywords;
+  }, [selectedRolePreset, customKeyword]);
+
+  const isRoleFilterActive = selectedRolePreset !== 'baseline' || customKeyword.trim().length > 0;
+
+  // Determine if a skill card matches the active role target
+  const isSkillMatched = (skill: SkillPassportItem): boolean => {
+    if (!isRoleFilterActive || activeKeywords.length === 0) return false;
+    const name = skill.name.toLowerCase();
+    const cat = skill.category.toLowerCase();
+    return activeKeywords.some(kw =>
+      name.includes(kw) ||
+      cat.includes(kw) ||
+      skill.signals.some(sig => sig.toLowerCase().includes(kw)) ||
+      (skill.proof_snippet && skill.proof_snippet.toLowerCase().includes(kw))
+    );
+  };
+
+  // Dynamically calculate Role Match % based on active preset / custom query
+  const effectiveRoleMatch = useMemo(() => {
+    if (!isRoleFilterActive) {
+      return role_match_pct;
+    }
+
+    const matched = skills.filter(isSkillMatched);
+    if (matched.length === 0) {
+      // No skills match this target role requirement
+      return Math.max(8.0, Number((role_match_pct * 0.22).toFixed(1)));
+    }
+
+    // Weight matched skills by verification status
+    const totalPoints = matched.reduce((sum, s) => {
+      let multiplier = 0.25;
+      if (s.verdict === 'VERIFIED') multiplier = 1.0;
+      else if (s.verdict === 'PARTIALLY_SUPPORTED') multiplier = 0.6;
+      else if (s.verdict === 'CONTRADICTED') multiplier = 0.05;
+      return sum + (s.final_points * multiplier);
+    }, 0);
+
+    const avgMatched = totalPoints / matched.length;
+    // Coverage ratio: how well candidate covers required target domain
+    const targetExpectedCount = Math.min(3, Math.max(1, Math.floor(activeKeywords.length / 2)));
+    const coverageRatio = Math.min(1.0, matched.length / targetExpectedCount);
+    const calculated = avgMatched * (0.55 + 0.45 * coverageRatio);
+
+    return Math.min(99.0, Math.max(5.0, Number(calculated.toFixed(1))));
+  }, [isRoleFilterActive, activeKeywords, skills, role_match_pct]);
 
   const getVerdictBadge = (verdict: string) => {
     switch (verdict) {
@@ -269,8 +362,14 @@ export const RecruiterView: React.FC<RecruiterViewProps> = ({
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* Page Header (Romer Title & Subtitle) */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2 pb-2">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 pb-2 border-b border-[#1B1C1E]">
         <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#50d8e9]/10 text-[#50d8e9] border border-[#50d8e9]/20 uppercase">
+              MODULE 4: EXECUTIVE DASHBOARD
+            </span>
+            <span className="text-[10px] font-mono text-[#9A9DA3]">LIVE AUDIT RUNTIME</span>
+          </div>
           <h1 className="font-heading font-extrabold text-2xl sm:text-3xl text-[#e5e2e3] tracking-tighter">
             Executive Command Dashboard
           </h1>
@@ -279,17 +378,114 @@ export const RecruiterView: React.FC<RecruiterViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#101112] border border-[#1B1C1E] text-xs font-mono text-[#50d8e9]">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Verify Integrity Button */}
+          <button
+            id="btn-recruiter-verify-integrity"
+            onClick={onVerifySignature}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#50d8e9]/10 border border-[#50d8e9]/40 hover:bg-[#50d8e9]/20 text-xs font-mono text-[#50d8e9] font-bold transition-all shadow-sm cursor-pointer"
+            title="Inspect cryptographic proof and test tamper resistance"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-[#50d8e9]" />
+            <span>Verify Integrity</span>
+          </button>
+
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#101112] border border-[#1B1C1E] text-xs font-mono text-[#50d8e9]">
             <span className="w-1.5 h-1.5 rounded-full bg-[#50d8e9] beacon-cyan"></span>
             <span>AUDIT SCORE: {overall_score}/100</span>
           </span>
         </div>
       </div>
 
+      {/* Module 4 Feature 3: Live Role / Job Description Re-Weighting Bar */}
+      <div className="bg-[#101112] border border-[#1B1C1E] rounded p-4 space-y-3 card-inner-glow">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded bg-[#50d8e9]/10 border border-[#50d8e9]/20 flex items-center justify-center text-[#50d8e9] shrink-0">
+              <Sliders className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-bold text-[#e5e2e3] uppercase tracking-wider">
+                  Live Role / Job Description Re-Weighting
+                </span>
+                <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-[#50d8e9]/10 text-[#50d8e9] border border-[#50d8e9]/30 uppercase">
+                  REACTIVE AUDIT
+                </span>
+              </div>
+              <p className="text-[11px] font-sans text-[#9A9DA3]">
+                Switch role target presets or type custom keywords to dynamically recalculate candidate Role Match % and highlight verified ground-truth skills.
+              </p>
+            </div>
+          </div>
+
+          {/* Custom Keyword Input */}
+          <div className="relative min-w-[260px] sm:min-w-[300px]">
+            <Search className="w-3.5 h-3.5 text-[#9A9DA3] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              id="role-custom-keyword-input"
+              type="text"
+              value={customKeyword}
+              onChange={(e) => {
+                setCustomKeyword(e.target.value);
+                if (e.target.value.trim()) setSelectedRolePreset('custom');
+              }}
+              placeholder="Search custom keywords (e.g. redis, async)..."
+              className="w-full pl-8 pr-7 py-1.5 bg-[#0a0a0b] border border-[#232426] focus:border-[#50d8e9] rounded text-xs font-mono text-[#e5e2e3] placeholder-[#6e7178] focus:outline-none transition-all"
+            />
+            {customKeyword && (
+              <button
+                onClick={() => {
+                  setCustomKeyword('');
+                  setSelectedRolePreset('baseline');
+                }}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#9A9DA3] hover:text-white"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Preset Selector Chips */}
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[#18191b]">
+          <span className="text-[10px] font-mono text-[#9A9DA3] uppercase tracking-widest mr-1">
+            TARGET ROLES:
+          </span>
+          {ROLE_PRESETS.map((preset) => {
+            const isSelected = selectedRolePreset === preset.id && !customKeyword.trim();
+            return (
+              <button
+                key={preset.id}
+                id={`preset-role-${preset.id}`}
+                onClick={() => {
+                  setSelectedRolePreset(preset.id);
+                  setCustomKeyword('');
+                }}
+                className={`px-2.5 py-1 rounded text-xs font-mono transition-all flex items-center gap-1.5 border cursor-pointer ${
+                  isSelected
+                    ? 'bg-[#50d8e9]/15 text-[#50d8e9] border-[#50d8e9]/50 shadow-sm shadow-[#50d8e9]/10 font-bold'
+                    : 'bg-[#151617] text-[#9A9DA3] border-[#202124] hover:text-[#e5e2e3] hover:border-[#35363a]'
+                }`}
+              >
+                {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-[#50d8e9]" />}
+                <span>{preset.name}</span>
+              </button>
+            );
+          })}
+
+          {isRoleFilterActive && (
+            <div className="ml-auto flex items-center gap-1.5 text-[10px] font-mono text-[#50d8e9] bg-[#50d8e9]/10 px-2 py-0.5 rounded border border-[#50d8e9]/20">
+              <Sparkles className="w-3 h-3" />
+              <span>ROLE MATCH RE-WEIGHTED: {effectiveRoleMatch.toFixed(1)}%</span>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Top 3 Metrics Row */}
       <MetricsRow
-        roleMatchPct={role_match_pct}
+        roleMatchPct={effectiveRoleMatch}
         overallScore={overall_score}
         authorshipPct={passport.candidate_authorship_pct ?? skills[0]?.authorship_pct ?? 0}
         refusalCount={refusal_panel.length}
@@ -335,6 +531,11 @@ export const RecruiterView: React.FC<RecruiterViewProps> = ({
                 <span className="text-[10px] font-mono text-[#5E6BFF] bg-[#5E6BFF]/10 px-1.5 py-0.2 rounded border border-[#5E6BFF]/20">
                   {skills.length} DETECTED
                 </span>
+                {isRoleFilterActive && (
+                  <span className="text-[10px] font-mono text-[#50d8e9] bg-[#50d8e9]/10 px-1.5 py-0.2 rounded border border-[#50d8e9]/20">
+                    {skills.filter(isSkillMatched).length} MATCH TARGET ROLE
+                  </span>
+                )}
               </div>
               <span className="text-[11px] font-mono text-[#9A9DA3] hidden sm:block">
                 Click card to view Git Blame proof
@@ -342,79 +543,102 @@ export const RecruiterView: React.FC<RecruiterViewProps> = ({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              {skills.map((skill, index) => (
-                <div
-                  key={index}
-                  onClick={() => onSelectSkill(skill)}
-                  className="bg-[#101112] border border-[#1B1C1E] hover:border-[#5E6BFF] romer-panel-hover rounded p-4 card-inner-glow cursor-pointer flex flex-col justify-between transition-all"
-                >
-                  <div>
-                    {/* Header */}
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div>
-                        <h3 className="font-heading font-bold text-base text-[#e5e2e3]">
-                          {skill.name}
-                        </h3>
-                        <p className="text-[11px] font-mono text-[#9A9DA3]">
-                          {skill.category.toUpperCase()} • {skill.level.toUpperCase()}
-                        </p>
+              {skills.map((skill, index) => {
+                const isMatched = isSkillMatched(skill);
+                return (
+                  <div
+                    key={index}
+                    id={`skill-card-${skill.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
+                    onClick={() => onSelectSkill(skill)}
+                    className={`rounded p-4 card-inner-glow cursor-pointer flex flex-col justify-between transition-all duration-200 border ${
+                      isMatched
+                        ? 'bg-[#0f1719] border-[#50d8e9] ring-1 ring-[#50d8e9]/40 shadow-lg shadow-[#50d8e9]/10 scale-[1.01]'
+                        : isRoleFilterActive
+                          ? 'bg-[#101112] border-[#1B1C1E] opacity-55 hover:opacity-100 hover:border-[#5E6BFF]'
+                          : 'bg-[#101112] border-[#1B1C1E] hover:border-[#5E6BFF] romer-panel-hover'
+                    }`}
+                  >
+                    <div>
+                      {/* Visual indicator for Target Role Match */}
+                      {isMatched && (
+                        <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-[#50d8e9]/20">
+                          <span className="text-[9px] font-mono font-bold text-[#50d8e9] flex items-center gap-1 uppercase tracking-wider">
+                            <Sparkles className="w-3 h-3 text-[#50d8e9]" />
+                            ROLE TARGET MATCH
+                          </span>
+                          <span className="text-[9px] font-mono text-[#50d8e9] bg-[#50d8e9]/15 px-1.5 py-0.2 rounded border border-[#50d8e9]/30 font-bold">
+                            PRIMARY SIGNAL
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Header */}
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div>
+                          <h3 className="font-heading font-bold text-base text-[#e5e2e3]">
+                            {skill.name}
+                          </h3>
+                          <p className="text-[11px] font-mono text-[#9A9DA3]">
+                            {skill.category.toUpperCase()} • {skill.level.toUpperCase()}
+                          </p>
+                        </div>
+                        {getVerdictBadge(skill.verdict)}
                       </div>
-                      {getVerdictBadge(skill.verdict)}
+
+                      {/* Rubric Points & Grade Formula */}
+                      <div className="flex items-center justify-between bg-[#151617] p-2 rounded border border-[#1B1C1E] mb-3 text-xs font-mono">
+                        <div>
+                          <span className="text-[#9A9DA3]">Points: </span>
+                          <strong className="text-[#e5e2e3] font-bold">{skill.final_points}</strong>
+                          <span className="text-[10px] text-[#9A9DA3]"> / 100</span>
+                        </div>
+                        <div className="text-[10px] text-[#50d8e9]">
+                          Ev({skill.evidence_score}) × Gr({skill.test_grade})
+                        </div>
+                      </div>
+
+                      {/* Authorship Bar */}
+                      {skill.authorship_pct !== undefined && skill.authorship_pct !== null && (
+                        <div className="space-y-1 mb-3">
+                          <div className="flex justify-between text-[10px] font-mono">
+                            <span className="text-[#9A9DA3]">Git Authorship</span>
+                            <span className="font-bold text-[#50d8e9]">{skill.authorship_pct}%</span>
+                          </div>
+                          <div className="w-full bg-[#1c1b1d] rounded-full h-1 overflow-hidden">
+                            <div
+                              className={`h-1 rounded-full ${
+                                skill.authorship_pct > 70 ? 'bg-[#50d8e9]' : skill.authorship_pct > 30 ? 'bg-[#ffb689]' : 'bg-[#ffb4ab]'
+                              }`}
+                              style={{ width: `${Math.min(100, skill.authorship_pct)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Signals preview */}
+                      <div className="space-y-1">
+                        {skill.signals.slice(0, 2).map((sig, i) => (
+                          <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono text-[#c6c5d8] truncate">
+                            <CheckCircle2 className="w-3 h-3 text-[#50d8e9] shrink-0" />
+                            <span className="truncate">{sig}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
-                    {/* Rubric Points & Grade Formula */}
-                    <div className="flex items-center justify-between bg-[#151617] p-2 rounded border border-[#1B1C1E] mb-3 text-xs font-mono">
-                      <div>
-                        <span className="text-[#9A9DA3]">Points: </span>
-                        <strong className="text-[#e5e2e3] font-bold">{skill.final_points}</strong>
-                        <span className="text-[10px] text-[#9A9DA3]"> / 100</span>
-                      </div>
-                      <div className="text-[10px] text-[#50d8e9]">
-                        Ev({skill.evidence_score}) × Gr({skill.test_grade})
-                      </div>
-                    </div>
-
-                    {/* Authorship Bar */}
-                    {skill.authorship_pct !== undefined && skill.authorship_pct !== null && (
-                      <div className="space-y-1 mb-3">
-                        <div className="flex justify-between text-[10px] font-mono">
-                          <span className="text-[#9A9DA3]">Git Authorship</span>
-                          <span className="font-bold text-[#50d8e9]">{skill.authorship_pct}%</span>
-                        </div>
-                        <div className="w-full bg-[#1c1b1d] rounded-full h-1 overflow-hidden">
-                          <div
-                            className={`h-1 rounded-full ${
-                              skill.authorship_pct > 70 ? 'bg-[#50d8e9]' : skill.authorship_pct > 30 ? 'bg-[#ffb689]' : 'bg-[#ffb4ab]'
-                            }`}
-                            style={{ width: `${Math.min(100, skill.authorship_pct)}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Signals preview */}
-                    <div className="space-y-1">
-                      {skill.signals.slice(0, 2).map((sig, i) => (
-                        <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono text-[#c6c5d8] truncate">
-                          <CheckCircle2 className="w-3 h-3 text-[#50d8e9] shrink-0" />
-                          <span className="truncate">{sig}</span>
-                        </div>
-                      ))}
+                    {/* Proof snippet tag */}
+                    <div className="mt-3 pt-2.5 border-t border-[#1B1C1E] flex items-center justify-between text-[10px] font-mono">
+                      <span className="text-[#50d8e9] truncate max-w-[180px]">
+                        {skill.proof_snippet || "Repository trace valid"}
+                      </span>
+                      <span className="text-[#5E6BFF] hover:underline flex items-center gap-0.5">
+                        <Eye className="w-3 h-3" />
+                        <span>Inspect</span>
+                      </span>
                     </div>
                   </div>
-
-                  {/* Proof snippet tag */}
-                  <div className="mt-3 pt-2.5 border-t border-[#1B1C1E] flex items-center justify-between text-[10px] font-mono">
-                    <span className="text-[#50d8e9] truncate max-w-[180px]">
-                      {skill.proof_snippet || "Repository trace valid"}
-                    </span>
-                    <span className="text-[#5E6BFF] hover:underline flex items-center gap-0.5">
-                      <Eye className="w-3 h-3" />
-                      <span>Inspect</span>
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

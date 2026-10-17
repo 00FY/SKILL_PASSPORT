@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { PassportDocument, LearningPlanItem } from '../data/mockData';
+import { PytestGeneratorModal } from './PytestGeneratorModal';
 
 interface StudentViewProps {
   passport: PassportDocument;
@@ -17,6 +18,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
 }) => {
   const { candidate_name, role_match_pct, overall_score, learning_plan } = passport;
 
+  const [isPytestModalOpen, setIsPytestModalOpen] = useState<boolean>(false);
   const [toggles, setToggles] = useState<Record<string, boolean>>({
     add_pytest: false,
     add_deploy: false,
@@ -134,8 +136,23 @@ export const StudentView: React.FC<StudentViewProps> = ({
                 className="w-4 h-4 rounded text-[#5E6BFF] focus:ring-0 bg-[#0e0e0f] border-[#2a2a2b]"
               />
             </div>
-            <h4 className="font-heading font-bold text-sm text-[#e5e2e3] mb-1">Add pytest suite to ShopAPI</h4>
+            <h4 className="font-heading font-bold text-sm text-[#e5e2e3] mb-1">
+              Add pytest suite to {passport.repo_url ? passport.repo_url.split('/').pop() : 'repository'}
+            </h4>
             <p className="text-xs text-[#9A9DA3]">Removes the testing refusal and satisfies test assertion requirements.</p>
+
+            <button
+              type="button"
+              id="btn-generate-pytest-suite"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsPytestModalOpen(true);
+              }}
+              className="mt-3 w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded bg-[#101112] border border-[#232426] hover:border-[#50d8e9] text-[11px] font-mono text-[#50d8e9] transition-all shadow-inner cursor-pointer"
+            >
+              <Code className="w-3.5 h-3.5" />
+              <span>Generate Starter test_main.py</span>
+            </button>
           </div>
 
           {/* Toggle 2 */}
@@ -313,6 +330,14 @@ export const StudentView: React.FC<StudentViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Starter Pytest Suite Generator Modal */}
+      <PytestGeneratorModal
+        isOpen={isPytestModalOpen}
+        onClose={() => setIsPytestModalOpen(false)}
+        candidateName={candidate_name}
+        repoContext={passport.repo_url}
+      />
     </div>
   );
 };

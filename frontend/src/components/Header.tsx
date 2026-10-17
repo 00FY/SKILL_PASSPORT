@@ -37,6 +37,17 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right Controls: Cryptographic SHA-256 seal & Time range filter */}
       <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+        {/* Verify Integrity Button */}
+        <button
+          id="btn-header-verify-integrity"
+          onClick={onVerifySignature}
+          className="flex items-center gap-1.5 px-3 py-1 rounded bg-[#50d8e9]/10 border border-[#50d8e9]/40 hover:bg-[#50d8e9]/20 text-[11px] font-mono text-[#50d8e9] font-bold transition-all shadow-sm cursor-pointer"
+          title="Inspect cryptographic proof and test tamper resistance"
+        >
+          <ShieldCheck className="w-3.5 h-3.5 text-[#50d8e9]" />
+          <span>Verify Integrity</span>
+        </button>
+
         {/* SHA-256 Seal Button */}
         <button
           onClick={onVerifySignature}
