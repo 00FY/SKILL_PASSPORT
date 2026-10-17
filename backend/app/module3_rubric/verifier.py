@@ -189,6 +189,22 @@ class FourStateVerifier:
                     )
             elif evidence_doc.is_fork and evidence_doc.candidate_authorship_pct < 10.0:
                 verdict = VerdictEnum.CONTRADICTED
+                if not any("template fork" in r.reason.lower() for r in refusals_out):
+                    audit_tracer.record(
+                        step="FORK_CONTRADICTION_CHECK",
+                        target=skill_name,
+                        rule_applied="RULE_FORK_LOW_AUTHORSHIP",
+                        verdict_reached="CONTRADICTED"
+                    )
+                    refusals_out.append(
+                        RefusalItem(
+                            claim=f"Authentic repository development in {skill_name}",
+                            verdict=VerdictEnum.CONTRADICTED,
+                            reason=f"Repository is a template fork where candidate authored only {round(evidence_doc.candidate_authorship_pct, 1)}% of lines.",
+                            evidence_found=f"Forked upstream commit tree with negligible ({round(evidence_doc.candidate_authorship_pct, 1)}%) candidate authorship.",
+                            suggested_remedy="Provide original repositories or feature branches with authored commit history."
+                        )
+                    )
 
             evidence_score, ev_reason = self.scoring.calculate_evidence_score(
                 has_deployed_or_pr=has_deployed_or_pr,
