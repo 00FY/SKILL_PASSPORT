@@ -9,18 +9,22 @@ from pydantic import BaseModel, Field
 from .schemas import (
     ClaimsDocument, EvidenceDocument, PassportDocument,
     SimulationRequest, SimulationResult, QuizResult, QuizSubmission,
-    ApplyQuizRequest, AuditStep
+    ApplyQuizRequest, AuditStep, CertificateEvidence, PillarScores
 )
 from .skills import normalize_skill
 from .jobs import JobManager, JobFailure, QueueFullError
 from .limits import RateLimiter, enforce, require_api_key
 from .module1_extractor import LLMClaimExtractor, PDFParser
 from .module1_extractor.pdf_parser import ResumeParseError
-from .module2_harvester import EvidenceHarvesterService, RepoSourceError, RepoAccessError, parse_repo_source
+from .module2_harvester import (
+    EvidenceHarvesterService, RepoSourceError, RepoAccessError, parse_repo_source,
+    ProfileScanner
+)
 from .module2_harvester.repo_source import local_repos_allowed
 from .module2_harvester.harvester_service import MAX_REPOS
+from .module4_certs import CertificateParser
 from .module3_rubric import (
-    PassportService, QuestionBankEngine, CryptoSigner, GRADE_WEIGHTS
+    PassportService, QuestionBankEngine, CryptoSigner, GRADE_WEIGHTS, DeterministicScoringEngine
 )
 from .data.demo_personas import (
     PRIYA_CLAIMS, PRIYA_EVIDENCE,
@@ -75,13 +79,19 @@ class ExtractTextRequest(BaseModel):
     links: Optional[List[str]] = None
 
 
+class DiscoverReposRequest(BaseModel):
+    username: str
+
+
 class AnalyzeRequest(BaseModel):
-    resume_text: str
+    resume_text: Optional[str] = None
+    github_username: Optional[str] = None
     repo_url: Optional[str] = None
     repo_urls: List[str] = Field(default_factory=list, description=f"Up to {MAX_REPOS} public repositories")
     candidate_name: Optional[str] = None
     git_identities: List[str] = Field(default_factory=list, description="Git emails / usernames the candidate commits with")
     links: Optional[List[str]] = None
+    certificates: List[CertificateEvidence] = Field(default_factory=list, description="Verified certificate credentials uploaded by candidate")
 
 
 class ParsedResumeResponse(BaseModel):
@@ -157,21 +167,79 @@ def harvest_evidence(req: HarvestRequest):
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+# --- Profile Discovery & Certificate Upload Endpoints ---
+@app.post("/api/discover-repos")
+def discover_user_repos(req: DiscoverReposRequest):
+    """Auto-discover candidate's public non-fork repositories from GitHub username or profile URL."""
+    try:
+        scanner = ProfileScanner()
+        return scanner.scan_profile(req.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/upload-cert", response_model=CertificateEvidence)
+async def upload_certificate(file: UploadFile = File(...), candidate_name: Optional[str] = None):
+    """Parse an uploaded certificate PDF or image, extracting issuer, credential ID, skills, and confidence."""
+    contents = await file.read()
+    parser = CertificateParser()
+    return parser.parse_file(file.filename or "certificate", contents, candidate_name)
+
+
 # --- Unified End-to-End Analysis Pipeline ---
 def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
     report = progress or (lambda _msg: None)
     repos = [u for u in ([req.repo_url] if req.repo_url else []) + req.repo_urls if u and u.strip()]
     links = list(repos) + list(req.links or [])
 
-    # 1. Module 1: Extract claims and guard against prompt injection
-    report("Reading the resume")
-    claims_doc = extractor.extract_from_text(req.resume_text, links)
+    # 0. Profile discovery if username provided and no explicit repos given
+    profile_info = None
+    if req.github_username and req.github_username.strip():
+        try:
+            report(f"Scanning GitHub profile @{req.github_username.strip()}")
+            scanner = ProfileScanner()
+            profile_info = scanner.scan_profile(req.github_username.strip())
+            if not repos and profile_info.repo_urls:
+                repos = profile_info.repo_urls[:MAX_REPOS]
+        except Exception:
+            pass
+
+    # 1. Module 1: Extract claims or build from code profile & certs (Optional Resume)
+    has_resume = bool(req.resume_text and req.resume_text.strip())
+    if has_resume:
+        report("Reading the resume")
+        claims_doc = extractor.extract_from_text(req.resume_text, links)
+    else:
+        report("Building skill profile from code repositories and credentials")
+        cand_name = (
+            req.candidate_name
+            or (profile_info.name if profile_info else None)
+            or req.github_username
+            or "Candidate"
+        )
+        claims_doc = ClaimsDocument(
+            candidate_name=cand_name,
+            applied_role="Software Engineer",
+            claims=[],
+            raw_text_length=0,
+            sanitized_text_preview="(Evaluated via Code Profile & Verified Credentials without Resume)"
+        )
+
     if req.candidate_name and req.candidate_name.strip():
         claims_doc.candidate_name = req.candidate_name.strip()
 
+    if profile_info:
+        claims_doc.github_profile = profile_info.model_dump()
+
+    # Attach uploaded certificates
+    if req.certificates:
+        claims_doc.certificates = req.certificates
+
     # No repositories given: fall back to repository links found in the resume itself
     auto_detected = False
-    if not repos:
+    if not repos and has_resume:
         resume_links = [l for c in claims_doc.claims for l in c.evidence_links] + links
         resume_links += pdf_parser.parse_text_or_markdown(req.resume_text)[1]
         repos = _repo_links(resume_links)[:MAX_REPOS]
@@ -187,9 +255,12 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
     if auto_detected:
         evidence_doc.warnings.insert(0, f"No repository was entered; analysed repositories linked in the resume: {', '.join(repos)}.")
 
-    # 3. Module 3: 4-State Rubric Engine & Cryptographic Signer (evidence was harvested by this server)
+    # 3. Module 3: 4-State Rubric Engine & Cryptographic Signer
     report("Scoring claims and signing the passport")
-    return passport_svc.generate_passport(claims_doc, evidence_doc, evidence_source="harvested")
+    gh_user = req.github_username.strip() if req.github_username and req.github_username.strip() else None
+    return passport_svc.generate_passport(
+        claims_doc, evidence_doc, evidence_source="harvested", github_username=gh_user
+    )
 
 
 @app.post("/api/analyze", response_model=PassportDocument, dependencies=[Depends(limit_analysis)])
@@ -284,8 +355,30 @@ def apply_quiz_grade(req: ApplyQuizRequest):
 
     skill_item.final_points = min(100, max(0, skill_item.evidence_score * grade_weight + consistency_bonus))
 
-    # Recalculate overall audit score
-    passport.overall_score = round(sum(s.final_points for s in passport.skills) / max(1, len(passport.skills)))
+    # Clean up pending quiz notice
+    skill_item.signals = [s for s in skill_item.signals if "Quiz Pending" not in s]
+    if skill_item.reasoning:
+        skill_item.reasoning = re.sub(r"\s*Mandatory (?:skill )?challenge (?:quiz )?pending.*", "", skill_item.reasoning).strip()
+        skill_item.reasoning += f" Completed skill challenge quiz (Grade {grade})."
+
+    # Recalculate pillar scores and balanced overall score
+    if passport.pillar_scores:
+        tested_skills = [s for s in passport.skills if s.test_grade != "E"]
+        if tested_skills:
+            quiz_weights = [GRADE_WEIGHTS.get(s.test_grade, 6) * 10 for s in tested_skills]
+            passport.pillar_scores.quiz_score = round(sum(quiz_weights) / len(quiz_weights))
+        passport.pillar_scores.code_score = round(sum(s.final_points for s in passport.skills) / max(1, len(passport.skills)))
+        balanced_overall, weights_used = DeterministicScoringEngine.calculate_pillar_scores(
+            code_score=passport.pillar_scores.code_score,
+            resume_score=passport.pillar_scores.resume_score,
+            cert_score=passport.pillar_scores.cert_score,
+            quiz_score=passport.pillar_scores.quiz_score
+        )
+        passport.pillar_scores.overall_score = balanced_overall
+        passport.pillar_scores.weights_used = weights_used
+        passport.overall_score = balanced_overall
+    else:
+        passport.overall_score = round(sum(s.final_points for s in passport.skills) / max(1, len(passport.skills)))
 
     # Record in audit log
     if passport.audit_log:

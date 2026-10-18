@@ -54,6 +54,29 @@ export interface RunAuditLog {
   generated_at: string;
 }
 
+export interface CertificateEvidence {
+  id: string;
+  filename: string;
+  certificate_name: string;
+  issuer: string;
+  candidate_name?: string | null;
+  issue_date?: string | null;
+  credential_id?: string | null;
+  verify_url?: string | null;
+  skills: string[];
+  confidence_score: number;
+  raw_text_snippet?: string | null;
+}
+
+export interface PillarScores {
+  code_score?: number | null;
+  resume_score?: number | null;
+  cert_score?: number | null;
+  quiz_score?: number | null;
+  overall_score: number;
+  weights_used: Record<string, number>;
+}
+
 export interface PassportDocument {
   evidence_source?: 'harvested' | 'demo';
   candidate_name: string;
@@ -65,12 +88,15 @@ export interface PassportDocument {
   total_commits?: number | null;
   repo_url?: string | null;
   repo_urls?: string[];
+  github_username?: string | null;
   is_fork?: boolean | null;
   skills: SkillPassportItem[];
   refusal_panel: RefusalItem[];
   learning_plan: LearningPlanItem[];
   security_alerts: SecurityFlag[];
   warnings?: string[];
+  pillar_scores?: PillarScores | null;
+  certificates?: CertificateEvidence[];
   tamper_proof_hash: string;
   issued_at: string;
   audit_log?: RunAuditLog | null;

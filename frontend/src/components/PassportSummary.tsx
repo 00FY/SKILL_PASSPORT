@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Loader2, ShieldAlert, XCircle } from 'luci
 import { PassportDocument } from '../lib/types';
 import { postJson } from '../lib/api';
 import { claimRows, problemRows } from './ClaimList';
+import { PillarScoreBar } from './PillarScoreBar';
 
 type SignatureState = 'checking' | 'valid' | 'invalid' | 'error';
 
@@ -78,7 +79,7 @@ export const PassportSummary: React.FC<{ passport: PassportDocument }> = ({ pass
         {breakdown && <p className="text-sm text-zinc-400">{breakdown}</p>}
 
         <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          <Stat label="Audit score" value={`${passport.overall_score}/100`} hint="Average evidence points across claimed skills" />
+          <Stat label="Balanced score" value={`${passport.overall_score}/100`} hint="Score balanced across active pillars (code, quiz, resume, certs)" />
           <Stat label="Role match" value={`${passport.role_match_pct}%`} hint="Share of claims backed by evidence, minus 7 per problem" />
           <Stat
             label="Code written by candidate"
@@ -88,6 +89,12 @@ export const PassportSummary: React.FC<{ passport: PassportDocument }> = ({ pass
               : 'No repository analysed'}
           />
         </div>
+
+        {passport.pillar_scores && (
+          <div className="mt-5">
+            <PillarScoreBar pillarScores={passport.pillar_scores} overallScore={passport.overall_score} />
+          </div>
+        )}
       </div>
     </section>
   );

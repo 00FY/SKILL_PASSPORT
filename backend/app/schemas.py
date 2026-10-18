@@ -24,10 +24,25 @@ class ClaimItem(BaseModel):
     claimed_detail: Optional[str] = None
     evidence_links: List[str] = Field(default_factory=list)
 
+class CertificateEvidence(BaseModel):
+    id: str
+    filename: str
+    certificate_name: str
+    issuer: str
+    candidate_name: Optional[str] = None
+    issue_date: Optional[str] = None
+    credential_id: Optional[str] = None
+    verify_url: Optional[str] = None
+    skills: List[str] = Field(default_factory=list)
+    confidence_score: float = 0.8
+    raw_text_snippet: Optional[str] = None
+
 class ClaimsDocument(BaseModel):
     candidate_name: str
     applied_role: str
     claims: List[ClaimItem] = Field(default_factory=list)
+    certificates: List[CertificateEvidence] = Field(default_factory=list)
+    github_profile: Optional[Dict[str, Any]] = None
     security_flags: List[SecurityFlag] = Field(default_factory=list)
     raw_text_length: int = 0
     sanitized_text_preview: Optional[str] = None
@@ -168,6 +183,14 @@ class RunAuditLog(BaseModel):
     traces: List[AuditStep] = Field(default_factory=list)
     generated_at: str
 
+class PillarScores(BaseModel):
+    code_score: Optional[int] = Field(default=None, description="Score based on git blame, tests, authorship, commits (0-100)")
+    resume_score: Optional[int] = Field(default=None, description="Score based on resume claims verification (0-100)")
+    cert_score: Optional[int] = Field(default=None, description="Score based on verified certificates (0-100)")
+    quiz_score: Optional[int] = Field(default=None, description="Score based on mandatory skill challenge quizzes (0-100)")
+    overall_score: int = Field(description="Final balanced score across active pillars")
+    weights_used: Dict[str, float] = Field(default_factory=dict, description="Active pillar weights, e.g. code: 0.40, quiz: 0.25")
+
 class PassportDocument(BaseModel):
     evidence_source: str = Field(
         default="harvested",
@@ -182,12 +205,15 @@ class PassportDocument(BaseModel):
     total_commits: Optional[int] = 0
     repo_url: Optional[str] = None
     repo_urls: List[str] = Field(default_factory=list)
+    github_username: Optional[str] = None
     is_fork: Optional[bool] = False
     skills: List[SkillPassportItem] = Field(default_factory=list)
     refusal_panel: List[RefusalItem] = Field(default_factory=list)
     learning_plan: List[LearningPlanItem] = Field(default_factory=list)
     security_alerts: List[SecurityFlag] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+    pillar_scores: Optional[PillarScores] = None
+    certificates: List[CertificateEvidence] = Field(default_factory=list)
     tamper_proof_hash: str
     issued_at: str
     audit_log: Optional[RunAuditLog] = None

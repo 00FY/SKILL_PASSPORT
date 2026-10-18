@@ -5,12 +5,14 @@ from ..schemas import (
     SkillPassportItem, RefusalItem, LearningPlanItem
 )
 from ..skills import (
-    normalize_skill, min_lines_for, ecosystem_for, TEST_FRAMEWORK_ECOSYSTEM, TESTING_SKILL_FRAMEWORKS
+    normalize_skill, min_lines_for, ecosystem_for, TEST_FRAMEWORK_ECOSYSTEM, TESTING_SKILL_FRAMEWORKS,
+    SKILL_CATALOG
 )
 from ..module2_harvester.repo_source import parse_repo_source, RepoSourceError
 from .scoring_engine import (
     DeterministicScoringEngine, GRADE_WEIGHTS, CONTRADICTED_POINTS, CLAIMED_ONLY_EVIDENCE, CLAIMED_ONLY_GRADE
 )
+from .question_bank import SAMPLE_QUIZZES
 from .audit_tracer import AuditTracer
 
 CODE_HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
@@ -54,7 +56,8 @@ class FourStateVerifier:
         audit_tracer: AuditTracer,
         challenge_grades: Optional[Dict[str, str]] = None
     ) -> Tuple[List[SkillPassportItem], List[RefusalItem], List[LearningPlanItem], int, int]:
-        challenge_grades = {normalize_skill(k).lower(): v for k, v in (challenge_grades or {}).items()}
+        grades_provided = challenge_grades is not None
+        challenge_grades_map = {normalize_skill(k).lower(): v for k, v in (challenge_grades or {}).items()}
 
         skills_out: List[SkillPassportItem] = []
         refusals: List[Tuple[Optional[str], RefusalItem]] = []
@@ -116,8 +119,39 @@ class FourStateVerifier:
                 ), "DURATION_CONTRADICTION_CHECK", "RULE_DURATION_GIT_SPAN_MISMATCH")
 
         # 2. Evaluate Skill Claims Against Ground-Truth Evidence
+        claims_to_evaluate: List[ClaimItem] = list(claims_doc.claims)
+        # If no resume was provided, auto-populate claims from detected skills in code & certificates
+        if not claims_to_evaluate:
+            auto_id = 1
+            seen_auto = set()
+            for sk in evidence_doc.skills_detected.keys():
+                can = normalize_skill(sk)
+                if can.lower() not in seen_auto:
+                    seen_auto.add(can.lower())
+                    cat = SKILL_CATALOG[can].category if can in SKILL_CATALOG else "language"
+                    claims_to_evaluate.append(ClaimItem(
+                        id=f"auto-{auto_id}",
+                        skill=can,
+                        category=cat,
+                        claimed_detail="Discovered in candidate code profile"
+                    ))
+                    auto_id += 1
+            for cert in claims_doc.certificates:
+                for sk in cert.skills:
+                    can = normalize_skill(sk)
+                    if can.lower() not in seen_auto:
+                        seen_auto.add(can.lower())
+                        cat = SKILL_CATALOG[can].category if can in SKILL_CATALOG else "framework"
+                        claims_to_evaluate.append(ClaimItem(
+                            id=f"auto-{auto_id}",
+                            skill=can,
+                            category=cat,
+                            claimed_detail=f"Discovered in certificate from {cert.issuer}"
+                        ))
+                        auto_id += 1
+
         seen_skills = set()
-        for claim in claims_doc.claims:
+        for claim in claims_to_evaluate:
             if claim.category == "soft_skill":
                 continue
             skill_name = normalize_skill(claim.skill)
@@ -128,7 +162,15 @@ class FourStateVerifier:
             in_scope = self._in_scope(claim, analysed_repos)
             ev_skill = self._find_evidence(skill_name, evidence_doc) if in_scope else None
             is_testing_skill = claim.category == "testing" or skill_name in TESTING_SKILL_FRAMEWORKS
-            has_certificate = any(any(m in l.lower() for m in CERT_MARKERS) for l in claim.evidence_links)
+
+            # Check for uploaded certificates matching this skill
+            matching_certs = [
+                c for c in claims_doc.certificates
+                if any(normalize_skill(s).lower() == skill_name.lower() for s in c.skills)
+            ]
+            has_uploaded_cert = len(matching_certs) > 0
+            has_cert_link = any(any(m in l.lower() for m in CERT_MARKERS) for l in claim.evidence_links)
+            has_certificate = has_uploaded_cert or has_cert_link
 
             if skill_name == "Git":
                 has_code_blame = signals.candidate_commit_count >= GIT_MIN_COMMITS
@@ -140,7 +182,20 @@ class FourStateVerifier:
             has_tests = self._has_tests_for(skill_name, ev_skill, evidence_doc) if in_scope else False
             has_deployed_or_pr = (signals.deployed_url is not None or signals.merged_prs > 0) and has_code_blame
 
-            grade = challenge_grades.get(skill_name.lower(), "A" if (has_code_blame and has_tests) else ("B" if has_code_blame else "C"))
+            # Mandatory Quiz Rule:
+            # If a skill has a question bank challenge, it must be attempted when challenge grades are active.
+            # Without taking the quiz, grade defaults to "E" (weight 2) to prevent unconfirmed high grades.
+            has_quiz_bank = (
+                skill_name in SAMPLE_QUIZZES or
+                any(normalize_skill(k).lower() == skill_name.lower() for k in SAMPLE_QUIZZES)
+            )
+            quiz_attempted = skill_name.lower() in challenge_grades_map
+            if quiz_attempted:
+                grade = challenge_grades_map[skill_name.lower()]
+            elif grades_provided and has_quiz_bank:
+                grade = "E"
+            else:
+                grade = "A" if (has_code_blame and has_tests) else ("B" if has_code_blame else "C")
 
             # Testing claims with no matching test suite go straight to the refusal queue
             if is_testing_skill and not has_code_blame and not has_certificate:
@@ -225,6 +280,12 @@ class FourStateVerifier:
                 final_points = self.scoring.calculate_skill_points(evidence_score, grade, consistency_bonus=consistency_bonus)
                 if consistency_bonus > 0 and bonus_reasons:
                     ev_reason += f" Includes {', '.join(bonus_reasons)}."
+                if matching_certs and not has_code_blame:
+                    ev_reason = f"Verified certificate from {matching_certs[0].issuer}: {matching_certs[0].certificate_name}."
+                elif matching_certs:
+                    ev_reason += f" Backed by verified certificate from {matching_certs[0].issuer} ({matching_certs[0].certificate_name})."
+                if not quiz_attempted and has_quiz_bank:
+                    ev_reason += " Mandatory challenge quiz pending (take quiz to verify and upgrade from Grade E)."
 
             snippet_str = None
             code_preview = None
@@ -234,6 +295,10 @@ class FourStateVerifier:
 
             signals_list = self._signals_for(skill_name, ev_skill, skill_pct, has_code_blame, has_tests,
                                              has_deployed_or_pr, has_certificate, in_scope, claim, evidence_doc)
+            if not quiz_attempted and has_quiz_bank:
+                signals_list.append("Mandatory Quiz Pending")
+            if matching_certs:
+                signals_list.append(f"Cert: {matching_certs[0].issuer}")
 
             if verdict == VerdictEnum.PARTIALLY_SUPPORTED:
                 if not has_code_blame:

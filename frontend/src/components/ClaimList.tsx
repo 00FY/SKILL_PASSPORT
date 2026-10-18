@@ -43,8 +43,10 @@ export const ClaimList: React.FC<ClaimListProps> = ({ passport, onOpenSkill }) =
   return (
     <section className="space-y-6">
       <div className="rounded-xl border border-white/10 bg-[#17181a]">
-        <h2 className="border-b border-white/10 px-5 py-3 font-heading font-semibold">Claims from the resume</h2>
-        {rows.length === 0 && <p className="px-5 py-4 text-sm text-zinc-400">No technical skills were found in the resume.</p>}
+        <h2 className="border-b border-white/10 px-5 py-3 font-heading font-semibold">
+          {passport.pillar_scores?.resume_score == null ? 'Evaluated Skills (Code Profile & Credentials)' : 'Claims & Evaluated Skills'}
+        </h2>
+        {rows.length === 0 && <p className="px-5 py-4 text-sm text-zinc-400">No technical skills detected or claimed.</p>}
         <ul className="divide-y divide-white/5">
           {rows.map((row, i) => <ClaimRowItem key={`${row.name}-${i}`} row={row} onOpenSkill={onOpenSkill} />)}
         </ul>
@@ -73,6 +75,7 @@ const ClaimRowItem: React.FC<{ row: ClaimRow; onOpenSkill: (s: SkillPassportItem
   const [open, setOpen] = useState(false);
   const clickable = !!row.skill || !!row.refusal;
   const onClick = () => (row.skill ? onOpenSkill(row.skill) : setOpen(o => !o));
+  const isQuizPending = row.skill?.signals.some(s => s.toLowerCase().includes('quiz pending'));
 
   return (
     <li>
@@ -82,11 +85,22 @@ const ClaimRowItem: React.FC<{ row: ClaimRow; onOpenSkill: (s: SkillPassportItem
         className="flex w-full items-center gap-4 px-5 py-3 text-left hover:bg-white/5"
       >
         <div className="min-w-0 flex-1">
-          <div className="font-medium">{row.name}</div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{row.name}</span>
+            {isQuizPending && (
+              <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300 border border-amber-500/30">
+                Quiz Pending
+              </span>
+            )}
+          </div>
           <div className="truncate text-sm text-zinc-400">{row.reason}</div>
         </div>
         {row.skill?.test_grade && (
-          <span className="hidden sm:inline-flex items-center rounded border border-indigo-500/30 bg-indigo-500/10 px-2 py-0.5 text-xs font-mono font-medium text-indigo-300">
+          <span className={`hidden sm:inline-flex items-center rounded border px-2 py-0.5 text-xs font-mono font-medium ${
+            isQuizPending
+              ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+              : 'border-indigo-500/30 bg-indigo-500/10 text-indigo-300'
+          }`}>
             Grade {row.skill.test_grade}
           </span>
         )}
