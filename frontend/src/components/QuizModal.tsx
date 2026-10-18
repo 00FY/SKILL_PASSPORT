@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { PassportDocument, QuizQuestion, QuizResult } from '../lib/types';
 import { postJson, request } from '../lib/api';
+import { pointsFormula } from '../lib/verdicts';
 
 interface QuizModalProps {
   skillName: string | null;
@@ -17,10 +18,11 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [appliedPassport, setAppliedPassport] = useState<PassportDocument | null>(null);
+  const [applyError, setApplyError] = useState('');
 
   useEffect(() => {
     if (!skillName) return;
-    setQuestions(null); setAnswers({}); setResult(null); setError(''); setAppliedPassport(null);
+    setQuestions(null); setAnswers({}); setResult(null); setError(''); setAppliedPassport(null); setApplyError('');
     request<{ questions: QuizQuestion[] }>(`/api/quiz/${encodeURIComponent(skillName)}`)
       .then(d => setQuestions(d.questions))
       .catch(e => setError(e.message));
@@ -36,18 +38,17 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
       const res = await postJson<QuizResult>('/api/quiz/submit', { skill: skillName, answers });
       setResult(res);
 
-      if (passport) {
+      // The server applies the grade it recorded for this attempt; the client never sends a grade
+      if (passport && res.attempt_id) {
         try {
           const updated = await postJson<PassportDocument>('/api/quiz/apply', {
             passport,
-            skill: skillName,
-            grade: res.grade,
-            percentage: res.percentage,
+            attempt_id: res.attempt_id,
           });
           setAppliedPassport(updated);
           onPassportUpdated?.(updated);
         } catch (applyErr) {
-          console.error('Failed to auto-apply challenge score to passport:', applyErr);
+          setApplyError((applyErr as Error).message);
         }
       }
     } catch (e) {
@@ -86,17 +87,17 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
                 </span>
               </div>
               {updatedSkill ? (
-                <p className="text-sm text-zinc-200">
-                  Skill Points Updated: Evidence {updatedSkill.evidence_score}/10 × Grade {result.grade} = <strong className="text-emerald-300">{updatedSkill.final_points} / 100 points</strong>.
-                </p>
+                <>
+                  <p className="text-sm text-zinc-200">
+                    Skill points updated: <strong className="text-emerald-300">{pointsFormula(updatedSkill)}</strong>.
+                  </p>
+                  <p className="text-xs text-zinc-400">Audit score and passport signature updated.</p>
+                </>
               ) : (
                 <p className="text-sm text-zinc-300">
-                  Formula applied: Evidence Score × Grade Weight {result.grade_weight} = Points awarded.
+                  {applyError ? `Grade not added to the passport: ${applyError}` : 'Grade recorded.'}
                 </p>
               )}
-              <p className="text-xs text-zinc-400">
-                Audit score and cryptographic HMAC signature updated in real time.
-              </p>
             </div>
           )}
 
