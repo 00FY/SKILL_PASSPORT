@@ -224,6 +224,83 @@ def test_merge_excludes_laundered_repo_but_keeps_clean_evidence():
     assert any("dump" in r.claim and r.verdict == VerdictEnum.CONTRADICTED for r in refusals)
 
 
+def test_cross_repo_weighted_authorship_and_consistency_bonus():
+    # 1. Cross-repo weighted-average authorship % and per-skill active months
+    repo1 = EvidenceDocument(
+        repo_url="https://github.com/u/backend-service",
+        repo_urls=["https://github.com/u/backend-service"],
+        candidate_authorship_pct=80.0,
+        active_months=3,
+        total_code_lines=500,
+        candidate_code_lines=400,
+        skills_detected={
+            "Python": SkillEvidence(
+                lines_authored=400,
+                total_lines=500,
+                authorship_pct=80.0,
+                files_count=4,
+                repo_count=1,
+                active_months=3,
+                distinct_months=["2024-01", "2024-02", "2024-03"],
+            )
+        },
+        signals=QualitySignals(has_tests=False, test_file_count=0, commit_count=15, candidate_commit_count=15),
+    )
+    repo2 = EvidenceDocument(
+        repo_url="https://github.com/u/analytics-engine",
+        repo_urls=["https://github.com/u/analytics-engine"],
+        candidate_authorship_pct=60.0,
+        active_months=4,
+        total_code_lines=1000,
+        candidate_code_lines=600,
+        skills_detected={
+            "Python": SkillEvidence(
+                lines_authored=600,
+                total_lines=1000,
+                authorship_pct=60.0,
+                files_count=6,
+                repo_count=1,
+                active_months=4,
+                distinct_months=["2024-03", "2024-04", "2024-05", "2024-06"],
+            )
+        },
+        signals=QualitySignals(has_tests=True, test_frameworks=["pytest"], test_file_count=2, commit_count=20, candidate_commit_count=20),
+    )
+
+    merged = merge_evidence([repo1, repo2])
+    py_ev = merged.skills_detected["Python"]
+
+    # Improvement 1: Weighted-average authorship %: (400 + 600) / (500 + 1000) = 1000 / 1500 = 66.7%
+    assert py_ev.lines_authored == 1000
+    assert py_ev.total_lines == 1500
+    assert py_ev.authorship_pct == 66.7
+
+    # Improvement 2: Per-skill active months: 6 distinct months
+    assert py_ev.repo_count == 2
+    assert py_ev.active_months == 6
+    assert py_ev.distinct_months == ["2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06"]
+
+    # Improvement 3: Multi-repo test signal merging -> repo 2 had tests for Python ecosystem, so merged has tests
+    claims = ClaimsDocument(candidate_name="U", applied_role="Dev", claims=[
+        ClaimItem(id="1", skill="Python", category="language", claimed_duration_months=12)
+    ])
+    verifier = FourStateVerifier()
+    skills, refusals, _, _, _ = verifier.evaluate(claims, merged, AuditTracer("U"), challenge_grades={"Python": "B"})
+
+    py_skill = next(s for s in skills if s.name == "Python")
+    # Base evidence score = 8 (tests verified because repo 2 had pytest for Python ecosystem)
+    # Challenge Grade B weight = 8 -> Base points = 8 * 8 = 64
+    # Improvement 4: Consistency bonus (+5 for 2 repos, +3 for 6 months) = +8 bonus -> 64 + 8 = 72 points
+    assert py_skill.evidence_score == 8
+    assert py_skill.final_points == 72
+    assert "+5 pts consistency bonus" in py_skill.reasoning
+    assert "+3 pts consistency bonus" in py_skill.reasoning
+
+    # Improvement 5: New signal strings in Evidence Drawer
+    assert "Evidence found across 2 repos" in py_skill.signals
+    assert "Practiced over 6 months" in py_skill.signals
+
+
 def test_claim_linking_unanalysed_repo_gets_no_credit():
     evidence = EvidenceDocument(
         repo_url="https://github.com/u/api", repo_urls=["https://github.com/u/api"], candidate_authorship_pct=95.0,
@@ -370,6 +447,49 @@ def test_quiz_never_falls_back_to_another_skill():
     assert client.get("/api/quiz/Java").status_code == 404
     assert client.post("/api/quiz/submit", json={"skill": "Java", "answers": {}}).status_code == 404
     assert len(client.get("/api/quiz/python").json()["questions"]) == 15
+
+
+def test_quiz_for_fastapi_and_applying_grade_updates_passport():
+    # 1. FastAPI has dedicated technical challenge questions
+    res = client.get("/api/quiz/FastAPI")
+    assert res.status_code == 200
+    questions = res.json()["questions"]
+    assert len(questions) == 15
+    assert any("Pydantic" in q["question"] or "Pydantic" in q["options"] for q in questions)
+
+    # 2. Supported languages and frameworks have challenge questions
+    for skill in ["JavaScript", "TypeScript", "React", "SQL", "Git"]:
+        assert len(client.get(f"/api/quiz/{skill}").json()["questions"]) == 15
+
+    # 3. Apply quiz grade updates the passport's final points and signature
+    priya_passport = client.get("/api/demo/priya").json()
+    fastapi_skill = next(s for s in priya_passport["skills"] if s["name"] == "FastAPI")
+    assert fastapi_skill["test_grade"] == "B"
+    previous_points = fastapi_skill["final_points"]
+
+    # Apply Grade A to FastAPI
+    apply_res = client.post("/api/quiz/apply", json={
+        "passport": priya_passport,
+        "skill": "FastAPI",
+        "grade": "A",
+        "percentage": 100.0
+    })
+    assert apply_res.status_code == 200
+    updated_passport = apply_res.json()
+    updated_fa = next(s for s in updated_passport["skills"] if s["name"] == "FastAPI")
+
+    assert updated_fa["test_grade"] == "A"
+    # Evidence score 10 * Grade A (10) + 3 consistency bonus = 100 points
+    assert updated_fa["final_points"] == 100
+    assert updated_fa["final_points"] > previous_points
+
+    # Audit log trace updated
+    assert any(t["step"] == "CHALLENGE_TEST_COMPLETED" and "FastAPI" in t["target"] for t in updated_passport["audit_log"]["traces"])
+
+    # Cryptographic signature is valid for the updated passport
+    verify_res = client.post("/api/verify-signature", json=updated_passport)
+    assert verify_res.json()["valid"] is True
+
 
 
 def test_signature_survives_javascript_number_formatting():

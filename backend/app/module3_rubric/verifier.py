@@ -200,6 +200,14 @@ class FourStateVerifier:
                         suggested_remedy="Provide original repositories or feature branches with authored commit history."
                     ), "FORK_CONTRADICTION_CHECK", "RULE_FORK_LOW_AUTHORSHIP")
 
+            # Consistency bonus calculation:
+            consistency_bonus = 0
+            bonus_reasons: List[str] = []
+            if has_code_blame:
+                s_repo_count = ev_skill.repo_count if ev_skill else len(evidence_doc.repo_urls or [evidence_doc.repo_url])
+                s_active_months = ev_skill.active_months if (ev_skill and ev_skill.active_months) else evidence_doc.active_months
+                consistency_bonus, bonus_reasons = self.scoring.calculate_consistency_bonus(s_repo_count, s_active_months)
+
             evidence_score, ev_reason = self.scoring.calculate_evidence_score(
                 has_deployed_or_pr=has_deployed_or_pr,
                 has_tests=has_tests and has_code_blame,
@@ -214,7 +222,9 @@ class FourStateVerifier:
                 evidence_score = CLAIMED_ONLY_EVIDENCE
                 final_points = self.scoring.calculate_skill_points(evidence_score, CLAIMED_ONLY_GRADE)
             else:
-                final_points = self.scoring.calculate_skill_points(evidence_score, grade)
+                final_points = self.scoring.calculate_skill_points(evidence_score, grade, consistency_bonus=consistency_bonus)
+                if consistency_bonus > 0 and bonus_reasons:
+                    ev_reason += f" Includes {', '.join(bonus_reasons)}."
 
             snippet_str = None
             code_preview = None
@@ -233,10 +243,14 @@ class FourStateVerifier:
             elif verdict == VerdictEnum.CLAIMED_ONLY:
                 plan_skills.append((skill_name, f"Build and commit an open-source project showing {skill_name} in action", evidence_doc.repo_url))
 
+            rule_label = f"RUBRIC_FORMULA({evidence_score}x{GRADE_WEIGHTS.get(grade, 6)})"
+            if consistency_bonus > 0 and verdict not in (VerdictEnum.CONTRADICTED, VerdictEnum.CLAIMED_ONLY):
+                rule_label += f"+BONUS({consistency_bonus})"
+
             audit_tracer.record(
                 step="SCORE_SKILL",
                 target=skill_name,
-                rule_applied=f"RUBRIC_FORMULA({evidence_score}x{GRADE_WEIGHTS.get(grade, 6)})",
+                rule_applied=rule_label,
                 verdict_reached=verdict.value
             )
 
@@ -304,6 +318,9 @@ class FourStateVerifier:
             test_ev = FourStateVerifier._find_evidence(testing_skill, evidence_doc)
             if test_ev is not None and test_ev.lines_authored >= min_lines_for(testing_skill):
                 return True
+            # Multi-repo test signal merging: if ANY repo has tests for this skill's ecosystem
+            if len(evidence_doc.repo_urls or []) > 1:
+                return True
         return False
 
     @staticmethod
@@ -314,10 +331,20 @@ class FourStateVerifier:
             out.append(f"Linked repository ({', '.join(FourStateVerifier._claim_repos(claim))}) was not analysed")
         if skill_name == "Git" and has_code_blame:
             out.append(f"{evidence_doc.signals.candidate_commit_count} commits authored over {evidence_doc.active_months} months")
+            eff_repo_count = len(evidence_doc.repo_urls or [evidence_doc.repo_url])
+            if eff_repo_count >= 2:
+                out.append(f"Evidence found across {eff_repo_count} repos")
         elif has_code_blame and ev_skill:
             out.append(f"Authored {ev_skill.lines_authored} lines across {ev_skill.files_count} files ({round(skill_pct, 1)}% of lines in those files)")
             if ev_skill.route_definitions:
                 out.append(f"{ev_skill.route_definitions} API route definitions found by static analysis")
+            eff_repo_count = ev_skill.repo_count if ev_skill else len(evidence_doc.repo_urls or [evidence_doc.repo_url])
+            eff_active_months = ev_skill.active_months if (ev_skill and ev_skill.active_months) else evidence_doc.active_months
+            if eff_repo_count >= 2:
+                out.append(f"Evidence found across {eff_repo_count} repos")
+            if eff_active_months >= 1:
+                month_str = f"{eff_active_months} months" if eff_active_months > 1 else "1 month"
+                out.append(f"Practiced over {month_str}")
         elif ev_skill and ev_skill.total_lines > 0:
             out.append(f"Found in repository, but the candidate authored {ev_skill.lines_authored} of {ev_skill.total_lines} lines (needs {min_lines_for(skill_name)}+ authored lines and {int(MIN_AUTHORSHIP_FOR_CODE)}%+ share)")
         if has_tests and has_code_blame:

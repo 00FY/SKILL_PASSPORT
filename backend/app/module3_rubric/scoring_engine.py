@@ -50,9 +50,26 @@ class DeterministicScoringEngine:
             return EVIDENCE_WEIGHTS["RESUME_ONLY"], "Claimed on resume only with no code ground-truth"
 
     @staticmethod
-    def calculate_skill_points(evidence_score: int, grade: str) -> int:
+    def calculate_consistency_bonus(repo_count: int, active_months: int) -> Tuple[int, List[str]]:
+        """
+        Consistency bonus:
+        +5 pts for evidence in 2+ repos
+        +3 pts for 6+ months of practice
+        """
+        bonus = 0
+        reasons = []
+        if repo_count >= 2:
+            bonus += 5
+            reasons.append(f"+5 pts consistency bonus (evidence across {repo_count} repositories)")
+        if active_months >= 6:
+            bonus += 3
+            reasons.append(f"+3 pts consistency bonus (practiced over {active_months} months)")
+        return bonus, reasons
+
+    @staticmethod
+    def calculate_skill_points(evidence_score: int, grade: str, consistency_bonus: int = 0) -> int:
         grade_weight = GRADE_WEIGHTS.get(grade.upper(), 6)
-        points = evidence_score * grade_weight
+        points = evidence_score * grade_weight + consistency_bonus
         return min(100, max(0, points))
 
     @staticmethod

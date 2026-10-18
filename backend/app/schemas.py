@@ -47,6 +47,9 @@ class SkillEvidence(BaseModel):
     sample_snippet: Optional[SampleSnippet] = None
     imports_found: List[str] = Field(default_factory=list)
     route_definitions: int = 0
+    repo_count: int = Field(default=1, description="Number of distinct repositories evidencing this skill")
+    active_months: int = Field(default=0, description="Distinct calendar months of commits touching this skill's files")
+    distinct_months: List[str] = Field(default_factory=list, description="Sorted list of distinct YYYY-MM commit months")
 
 class QualitySignals(BaseModel):
     has_tests: bool = False
@@ -202,3 +205,10 @@ class SimulationResult(BaseModel):
     score_delta: int
     updated_skills: List[SkillPassportItem]
     resolved_refusals: List[str]
+
+class ApplyQuizRequest(BaseModel):
+    passport: PassportDocument
+    skill: str
+    grade: str
+    percentage: Optional[float] = None
+

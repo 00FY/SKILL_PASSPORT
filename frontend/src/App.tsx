@@ -66,7 +66,12 @@ export const App: React.FC = () => {
         onClose={() => setSelectedSkill(null)}
         onOpenQuiz={name => { setSelectedSkill(null); setQuizSkill(name); }}
       />
-      <QuizModal skillName={quizSkill} onClose={() => setQuizSkill(null)} />
+      <QuizModal
+        skillName={quizSkill}
+        passport={passport}
+        onClose={() => setQuizSkill(null)}
+        onPassportUpdated={p => setPassport(p)}
+      />
       <UploadModal
         isOpen={uploadOpen}
         onClose={() => setUploadOpen(false)}

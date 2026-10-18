@@ -249,12 +249,20 @@ class EvidenceHarvesterService:
                 code_preview=preview,
             )
 
+        skill_months = set()
+        for _, i in infos:
+            skill_months.update(i.get("candidate_months", []))
+        sorted_months = sorted(skill_months)
+
         return SkillEvidence(
             lines_authored=cand,
             total_lines=total,
             authorship_pct=round(cand / max(1, total) * 100.0, 1),
             files_count=sum(1 for _, i in infos if i["candidate"] > 0),
             sample_snippet=snippet,
+            repo_count=1 if (cand > 0 or total > 0) else 0,
+            active_months=len(sorted_months),
+            distinct_months=sorted_months,
         )
 
 
@@ -291,10 +299,14 @@ def merge_evidence(docs: List[EvidenceDocument]) -> EvidenceDocument:
         return first
 
     skills: Dict[str, SkillEvidence] = {}
+    skill_repos: Dict[str, set] = {}
     for d in clean:
         for name, ev in d.skills_detected.items():
+            skill_repos.setdefault(name, set()).add(d.repo_url)
             if name not in skills:
-                skills[name] = ev.model_copy(deep=True)
+                cur = ev.model_copy(deep=True)
+                cur.repo_count = len(skill_repos[name])
+                skills[name] = cur
                 continue
             cur = skills[name]
             better_snippet = ev.lines_authored > cur.lines_authored and ev.sample_snippet
@@ -304,6 +316,10 @@ def merge_evidence(docs: List[EvidenceDocument]) -> EvidenceDocument:
             cur.route_definitions += ev.route_definitions
             cur.imports_found = sorted(set(cur.imports_found) | set(ev.imports_found))[:10]
             cur.authorship_pct = round(cur.lines_authored / max(1, cur.total_lines) * 100.0, 1)
+            all_months = set(cur.distinct_months) | set(ev.distinct_months)
+            cur.distinct_months = sorted(all_months)
+            cur.active_months = len(cur.distinct_months)
+            cur.repo_count = len(skill_repos[name])
             if better_snippet:
                 cur.sample_snippet = ev.sample_snippet
 

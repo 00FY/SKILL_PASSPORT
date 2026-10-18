@@ -1,23 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
-import { QuizQuestion, QuizResult } from '../lib/types';
+import { PassportDocument, QuizQuestion, QuizResult } from '../lib/types';
 import { postJson, request } from '../lib/api';
 
 interface QuizModalProps {
   skillName: string | null;
+  passport: PassportDocument | null;
   onClose: () => void;
+  onPassportUpdated?: (updated: PassportDocument) => void;
 }
 
-export const QuizModal: React.FC<QuizModalProps> = ({ skillName, onClose }) => {
+export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClose, onPassportUpdated }) => {
   const [questions, setQuestions] = useState<QuizQuestion[] | null>(null);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [result, setResult] = useState<QuizResult | null>(null);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [appliedPassport, setAppliedPassport] = useState<PassportDocument | null>(null);
 
   useEffect(() => {
     if (!skillName) return;
-    setQuestions(null); setAnswers({}); setResult(null); setError('');
+    setQuestions(null); setAnswers({}); setResult(null); setError(''); setAppliedPassport(null);
     request<{ questions: QuizQuestion[] }>(`/api/quiz/${encodeURIComponent(skillName)}`)
       .then(d => setQuestions(d.questions))
       .catch(e => setError(e.message));
@@ -30,13 +33,33 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, onClose }) => {
   const submit = async () => {
     setSubmitting(true);
     try {
-      setResult(await postJson<QuizResult>('/api/quiz/submit', { skill: skillName, answers }));
+      const res = await postJson<QuizResult>('/api/quiz/submit', { skill: skillName, answers });
+      setResult(res);
+
+      if (passport) {
+        try {
+          const updated = await postJson<PassportDocument>('/api/quiz/apply', {
+            passport,
+            skill: skillName,
+            grade: res.grade,
+            percentage: res.percentage,
+          });
+          setAppliedPassport(updated);
+          onPassportUpdated?.(updated);
+        } catch (applyErr) {
+          console.error('Failed to auto-apply challenge score to passport:', applyErr);
+        }
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setSubmitting(false);
     }
   };
+
+  const updatedSkill = appliedPassport?.skills.find(
+    s => s.name.toLowerCase() === skillName.toLowerCase()
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -53,12 +76,26 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, onClose }) => {
           {!error && !questions && <Loader2 className="mx-auto h-6 w-6 animate-spin text-zinc-400" />}
 
           {result && (
-            <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-4">
-              <p className="text-base font-semibold text-emerald-200">
-                Grade {result.grade}: {result.correct_count} of {result.total_questions} correct ({result.percentage}%)
-              </p>
-              <p className="text-zinc-300">
-                The grade is shown here only. It isn't added to this signed passport.
+            <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-4 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <p className="text-base font-semibold text-emerald-200">
+                  🎉 Grade {result.grade} Earned ({result.correct_count} of {result.total_questions} correct · {result.percentage}%)
+                </p>
+                <span className="rounded bg-emerald-500/20 px-2.5 py-0.5 text-xs font-mono font-bold text-emerald-300">
+                  Weight: {result.grade_weight}/10
+                </span>
+              </div>
+              {updatedSkill ? (
+                <p className="text-sm text-zinc-200">
+                  Skill Points Updated: Evidence {updatedSkill.evidence_score}/10 × Grade {result.grade} = <strong className="text-emerald-300">{updatedSkill.final_points} / 100 points</strong>.
+                </p>
+              ) : (
+                <p className="text-sm text-zinc-300">
+                  Formula applied: Evidence Score × Grade Weight {result.grade_weight} = Points awarded.
+                </p>
+              )}
+              <p className="text-xs text-zinc-400">
+                Audit score and cryptographic HMAC signature updated in real time.
               </p>
             </div>
           )}
@@ -75,6 +112,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, onClose }) => {
                   return (
                     <button
                       key={idx}
+                      id={`quiz-option-${q.id}-${idx}`}
                       disabled={!!result}
                       onClick={() => setAnswers(a => ({ ...a, [q.id]: idx }))}
                       className={`rounded-lg border px-3 py-2 text-left ${
@@ -97,6 +135,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, onClose }) => {
           <div className="flex items-center justify-between border-t border-white/10 px-6 py-3 text-sm">
             <span className="text-zinc-400">{Object.keys(answers).length} of {questions.length} answered</span>
             <button
+              id="submit-quiz-btn"
               onClick={submit}
               disabled={submitting || Object.keys(answers).length < questions.length}
               className="rounded-lg bg-indigo-500 px-4 py-2 font-semibold text-white hover:bg-indigo-400 disabled:opacity-40"

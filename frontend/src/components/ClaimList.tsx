@@ -85,7 +85,12 @@ const ClaimRowItem: React.FC<{ row: ClaimRow; onOpenSkill: (s: SkillPassportItem
           <div className="font-medium">{row.name}</div>
           <div className="truncate text-sm text-zinc-400">{row.reason}</div>
         </div>
-        {row.points !== undefined && <span className="hidden text-sm text-zinc-500 sm:inline">{row.points} pts</span>}
+        {row.skill?.test_grade && (
+          <span className="hidden sm:inline-flex items-center rounded border border-indigo-500/30 bg-indigo-500/10 px-2 py-0.5 text-xs font-mono font-medium text-indigo-300">
+            Grade {row.skill.test_grade}
+          </span>
+        )}
+        {row.points !== undefined && <span className="hidden text-sm text-zinc-400 font-medium sm:inline">{row.points} pts</span>}
         <VerdictBadge verdict={row.verdict} />
         {row.skill
           ? <ChevronRight className="h-4 w-4 text-zinc-500" />

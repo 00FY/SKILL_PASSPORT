@@ -72,15 +72,28 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ skill, auditLog,
             </Section>
           )}
 
-          {skill.verdict !== 'VERIFIED' && (
-            <button
-              onClick={() => onOpenQuiz(skill.name)}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/15 py-2.5 text-zinc-200 hover:bg-white/5"
-            >
-              <Award className="h-4 w-4" />
-              Take the {skill.name} skill challenge
-            </button>
-          )}
+          <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="font-semibold text-indigo-200">Skill Test Challenge</p>
+                <p className="text-xs text-zinc-400">
+                  {skill.test_grade ? (
+                    <>Test Grade: <strong className="text-emerald-300">Grade {skill.test_grade}</strong> · Evidence: <strong className="text-zinc-200">{skill.evidence_score}/10</strong></>
+                  ) : (
+                    <>Take test to verify grade · Evidence: <strong className="text-zinc-200">{skill.evidence_score}/10</strong></>
+                  )}
+                </p>
+              </div>
+              <button
+                id="take-test-btn"
+                onClick={() => onOpenQuiz(skill.name)}
+                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 transition-colors"
+              >
+                <Award className="h-4 w-4" />
+                {skill.test_grade ? `Retake ${skill.name} Test` : `Take ${skill.name} Test`}
+              </button>
+            </div>
+          </div>
         </div>
       </aside>
     </div>

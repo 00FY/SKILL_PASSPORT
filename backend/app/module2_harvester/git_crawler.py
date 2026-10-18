@@ -75,6 +75,8 @@ class GitBlameAnalyzer:
             if rel_path not in code_paths:
                 files.append((rel_path, None))
 
+        commit_ts_by_hash = {c["hash"]: c["ts"] for c in commits}
+
         started = time.monotonic()
         truncated = False
         per_file: Dict[str, Dict[str, Any]] = {}
@@ -92,6 +94,7 @@ class GitBlameAnalyzer:
 
             total = cand = roots = 0
             best_run, run_start, run_end = (None, 0), None, None
+            candidate_months = set()
             for line_no, (c_hash, author, email, content) in enumerate(entries, start=1):
                 if not content.strip():
                     continue  # blank lines carry no authorship
@@ -100,6 +103,9 @@ class GitBlameAnalyzer:
                     roots += 1
                 if matcher.matches(author, email):
                     cand += 1
+                    ts = commit_ts_by_hash.get(c_hash)
+                    if ts:
+                        candidate_months.add(datetime.fromtimestamp(ts).strftime("%Y-%m"))
                     if run_start is None:
                         run_start = line_no
                     run_end = line_no
@@ -108,7 +114,13 @@ class GitBlameAnalyzer:
                 else:
                     run_start = run_end = None
 
-            per_file[rel_path] = {"lang": lang, "total": total, "candidate": cand, "best_run": best_run}
+            per_file[rel_path] = {
+                "lang": lang,
+                "total": total,
+                "candidate": cand,
+                "best_run": best_run,
+                "candidate_months": sorted(candidate_months),
+            }
             if lang:
                 total_code_lines += total
                 candidate_code_lines += cand

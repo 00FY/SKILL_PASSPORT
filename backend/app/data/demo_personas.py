@@ -80,7 +80,9 @@ PRIYA_EVIDENCE = EvidenceDocument(
                 )
             ),
             imports_found=["pydantic", "fastapi", "asyncio"],
-            route_definitions=14
+            route_definitions=14,
+            repo_count=1,
+            active_months=14,
         ),
         "FastAPI": SkillEvidence(
             lines_authored=1820,
@@ -96,7 +98,9 @@ PRIYA_EVIDENCE = EvidenceDocument(
                 )
             ),
             imports_found=["fastapi", "FastAPI", "APIRouter", "Depends"],
-            route_definitions=12
+            route_definitions=12,
+            repo_count=1,
+            active_months=14,
         )
     },
     signals=QualitySignals(
@@ -256,7 +260,9 @@ JORDAN_EVIDENCE = EvidenceDocument(
                 )
             ),
             imports_found=["json", "sys"],
-            route_definitions=0
+            route_definitions=0,
+            repo_count=1,
+            active_months=4,
         )
     },
     signals=QualitySignals(

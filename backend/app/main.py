@@ -1,4 +1,6 @@
 import os
+import re
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,8 +8,10 @@ from pydantic import BaseModel, Field
 
 from .schemas import (
     ClaimsDocument, EvidenceDocument, PassportDocument,
-    SimulationRequest, SimulationResult, QuizResult, QuizSubmission
+    SimulationRequest, SimulationResult, QuizResult, QuizSubmission,
+    ApplyQuizRequest, AuditStep
 )
+from .skills import normalize_skill
 from .jobs import JobManager, JobFailure, QueueFullError
 from .limits import RateLimiter, enforce, require_api_key
 from .module1_extractor import LLMClaimExtractor, PDFParser
@@ -16,7 +20,7 @@ from .module2_harvester import EvidenceHarvesterService, RepoSourceError, RepoAc
 from .module2_harvester.repo_source import local_repos_allowed
 from .module2_harvester.harvester_service import MAX_REPOS
 from .module3_rubric import (
-    PassportService, QuestionBankEngine, CryptoSigner
+    PassportService, QuestionBankEngine, CryptoSigner, GRADE_WEIGHTS
 )
 from .data.demo_personas import (
     PRIYA_CLAIMS, PRIYA_EVIDENCE,
@@ -253,6 +257,56 @@ def submit_quiz(sub: QuizSubmission):
     if not quiz_engine.get_questions_for_skill(sub.skill):
         raise HTTPException(status_code=404, detail=f"No Skill Challenge exists for '{sub.skill}' yet.")
     return quiz_engine.evaluate_quiz(sub.skill, sub.answers)
+
+
+@app.post("/api/quiz/apply", response_model=PassportDocument)
+def apply_quiz_grade(req: ApplyQuizRequest):
+    """
+    Applies the completed skill challenge test grade to a passport, recalculating
+    the skill points via: Final Points = min(100, max(0, Evidence Score * Grade Weight + Consistency Bonus))
+    recalculating the overall audit score, appending the audit trace, and re-signing the passport.
+    """
+    passport = req.passport
+    target_skill = normalize_skill(req.skill).lower()
+    skill_item = next((s for s in passport.skills if normalize_skill(s.name).lower() == target_skill), None)
+    if not skill_item:
+        raise HTTPException(status_code=404, detail=f"Skill '{req.skill}' not found in passport claims.")
+
+    grade = req.grade.upper()
+    grade_weight = GRADE_WEIGHTS.get(grade, 6)
+    skill_item.test_grade = grade
+
+    # Extract consistency bonus if present in reasoning
+    consistency_bonus = 0
+    if skill_item.reasoning and "Includes +" in skill_item.reasoning:
+        matches = re.findall(r"\+(\d+)\s*pts", skill_item.reasoning)
+        consistency_bonus = sum(int(m) for m in matches)
+
+    skill_item.final_points = min(100, max(0, skill_item.evidence_score * grade_weight + consistency_bonus))
+
+    # Recalculate overall audit score
+    passport.overall_score = round(sum(s.final_points for s in passport.skills) / max(1, len(passport.skills)))
+
+    # Record in audit log
+    if passport.audit_log:
+        pct_text = f" ({req.percentage}%)" if req.percentage is not None else ""
+        passport.audit_log.traces.append(AuditStep(
+            step="CHALLENGE_TEST_COMPLETED",
+            target=skill_item.name,
+            rule_applied=f"CHALLENGE_TEST{pct_text}_GRADE_{grade}(weight:{grade_weight})_FORMULA({skill_item.evidence_score}x{grade_weight}+{consistency_bonus})={skill_item.final_points}",
+            verdict_reached=skill_item.verdict.value,
+            timestamp=datetime.now(timezone.utc).isoformat()
+        ))
+
+    # Re-sign the passport with HMAC-SHA256
+    raw_dict = passport.model_dump()
+    raw_dict.pop("tamper_proof_hash", None)
+    raw_dict["issued_at"] = datetime.now(timezone.utc).isoformat()
+    passport.issued_at = raw_dict["issued_at"]
+    passport.tamper_proof_hash = CryptoSigner.sign_passport(raw_dict)
+
+    return passport
+
 
 
 # --- Cryptographic Verification ---
