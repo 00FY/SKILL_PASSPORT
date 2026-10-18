@@ -151,7 +151,9 @@ class PassportService:
             if author_more and s.verdict == VerdictEnum.PARTIALLY_SUPPORTED:
                 s.verdict = VerdictEnum.VERIFIED
                 s.signals.append("Simulated: sustained authorship over 3+ months")
-            s.final_points = DeterministicScoringEngine.calculate_skill_points(s.evidence_score, s.test_grade)
+            s.final_points = DeterministicScoringEngine.calculate_skill_points(
+                s.evidence_score, s.test_grade, consistency_bonus=s.consistency_bonus
+            )
 
         if add_tests:
             for r in list(remaining_refusals):

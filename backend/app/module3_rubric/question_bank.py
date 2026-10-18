@@ -1,3 +1,7 @@
+import secrets
+import threading
+import time
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from ..schemas import QuizQuestion, QuizResult, QuizReviewItem, PublicQuizQuestion
 from .scoring_engine import DeterministicScoringEngine, GRADE_WEIGHTS
@@ -660,3 +664,46 @@ class QuestionBankEngine:
                 for q in questions
             ]
         )
+
+
+@dataclass
+class QuizAttempt:
+    skill: str
+    grade: str
+    percentage: float
+    created_at: float = field(default_factory=time.time)
+
+
+class QuizAttemptStore:
+    """
+    Server-side record of graded quiz attempts. /api/quiz/apply accepts only an attempt id from here,
+    so a client can't claim a grade it never earned. Attempts are single-use and expire.
+    In memory: per process, cleared on restart.
+    """
+
+    def __init__(self, ttl_s: float = 3600.0):
+        self.ttl_s = ttl_s
+        self._attempts: Dict[str, QuizAttempt] = {}
+        self._lock = threading.Lock()
+
+    def record(self, skill: str, grade: str, percentage: float) -> str:
+        attempt_id = secrets.token_urlsafe(16)
+        with self._lock:
+            self._purge()
+            self._attempts[attempt_id] = QuizAttempt(skill=skill, grade=grade, percentage=percentage)
+        return attempt_id
+
+    def get(self, attempt_id: str) -> Optional[QuizAttempt]:
+        with self._lock:
+            self._purge()
+            return self._attempts.get(attempt_id)
+
+    def consume(self, attempt_id: str) -> Optional[QuizAttempt]:
+        with self._lock:
+            self._purge()
+            return self._attempts.pop(attempt_id, None)
+
+    def _purge(self) -> None:
+        cutoff = time.time() - self.ttl_s
+        for key in [k for k, a in self._attempts.items() if a.created_at < cutoff]:
+            del self._attempts[key]

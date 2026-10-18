@@ -2,6 +2,7 @@ import React from 'react';
 import { Award, FileCode, X } from 'lucide-react';
 import { RunAuditLog, SkillPassportItem } from '../lib/types';
 import { VerdictBadge } from './VerdictBadge';
+import { pointsFormula } from '../lib/verdicts';
 
 interface EvidenceDrawerProps {
   skill: SkillPassportItem | null;
@@ -43,9 +44,7 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ skill, auditLog,
           </Section>
 
           <Section title="How the points were calculated">
-            <p className="text-zinc-300">
-              Evidence {skill.evidence_score}/10 × grade {skill.test_grade} = {skill.final_points} points
-            </p>
+            <p className="text-zinc-300">{pointsFormula(skill)}</p>
             {skill.reasoning && <p className="text-zinc-400">Evidence level: {skill.reasoning}</p>}
           </Section>
 

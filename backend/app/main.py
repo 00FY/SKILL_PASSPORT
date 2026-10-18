@@ -24,8 +24,9 @@ from .module2_harvester.repo_source import local_repos_allowed
 from .module2_harvester.harvester_service import MAX_REPOS
 from .module4_certs import CertificateParser
 from .module3_rubric import (
-    PassportService, QuestionBankEngine, CryptoSigner, GRADE_WEIGHTS, DeterministicScoringEngine
+    PassportService, QuestionBankEngine, QuizAttemptStore, CryptoSigner, GRADE_WEIGHTS, DeterministicScoringEngine
 )
+from .schemas import VerdictEnum
 from .data.demo_personas import (
     PRIYA_CLAIMS, PRIYA_EVIDENCE,
     ALEX_CLAIMS, ALEX_EVIDENCE,
@@ -58,6 +59,7 @@ pdf_parser = PDFParser()
 harvester = EvidenceHarvesterService()
 passport_svc = PassportService()
 quiz_engine = QuestionBankEngine()
+quiz_attempts = QuizAttemptStore()
 jobs = JobManager()
 # Each analysis clones and blames repositories, so they are limited per client address
 analysis_limiter = RateLimiter.from_env("SKILL_PASSPORT_RATE_LIMIT", "20/hour")
@@ -327,33 +329,46 @@ def get_quiz(skill: str):
 def submit_quiz(sub: QuizSubmission):
     if not quiz_engine.get_questions_for_skill(sub.skill):
         raise HTTPException(status_code=404, detail=f"No Skill Challenge exists for '{sub.skill}' yet.")
-    return quiz_engine.evaluate_quiz(sub.skill, sub.answers)
+    result = quiz_engine.evaluate_quiz(sub.skill, sub.answers)
+    # Remember the graded attempt server-side; the client only gets an id it can redeem once
+    result.attempt_id = quiz_attempts.record(normalize_skill(sub.skill), result.grade, result.percentage)
+    return result
 
 
 @app.post("/api/quiz/apply", response_model=PassportDocument)
 def apply_quiz_grade(req: ApplyQuizRequest):
     """
-    Applies the completed skill challenge test grade to a passport, recalculating
-    the skill points via: Final Points = min(100, max(0, Evidence Score * Grade Weight + Consistency Bonus))
-    recalculating the overall audit score, appending the audit trace, and re-signing the passport.
+    Applies a graded skill challenge to a passport and re-signs it.
+
+    Two checks keep this from becoming a way to get arbitrary passports signed:
+    - the passport must carry a valid signature from this server, so it can't have been edited;
+    - the grade comes from the server's record of a submitted quiz (single use), not from the client.
+    Only the challenged skill's grade and points change: Evidence x Grade Weight + Consistency Bonus (max 100).
     """
     passport = req.passport
-    target_skill = normalize_skill(req.skill).lower()
+    signed_payload = passport.model_dump(mode="json")
+    if not CryptoSigner.verify_passport_signature(signed_payload, passport.tamper_proof_hash)["valid"]:
+        raise HTTPException(status_code=400, detail="This passport's signature is invalid, so a challenge grade can't be applied to it.")
+
+    attempt = quiz_attempts.get(req.attempt_id)
+    if attempt is None:
+        raise HTTPException(status_code=400, detail="Unknown, expired or already used quiz attempt. Take the challenge again.")
+
+    target_skill = attempt.skill.lower()
     skill_item = next((s for s in passport.skills if normalize_skill(s.name).lower() == target_skill), None)
     if not skill_item:
-        raise HTTPException(status_code=404, detail=f"Skill '{req.skill}' not found in passport claims.")
+        raise HTTPException(status_code=404, detail=f"Skill '{attempt.skill}' is not one of this passport's claims.")
+    if skill_item.verdict == VerdictEnum.CONTRADICTED:
+        raise HTTPException(status_code=409, detail=f"{skill_item.name} is contradicted by repository evidence; a quiz can't override that.")
 
-    grade = req.grade.upper()
-    grade_weight = GRADE_WEIGHTS.get(grade, 6)
+    quiz_attempts.consume(req.attempt_id)
+    grade = attempt.grade
+    grade_weight = GRADE_WEIGHTS[grade]
     skill_item.test_grade = grade
-
-    # Extract consistency bonus if present in reasoning
-    consistency_bonus = 0
-    if skill_item.reasoning and "Includes +" in skill_item.reasoning:
-        matches = re.findall(r"\+(\d+)\s*pts", skill_item.reasoning)
-        consistency_bonus = sum(int(m) for m in matches)
-
-    skill_item.final_points = min(100, max(0, skill_item.evidence_score * grade_weight + consistency_bonus))
+    skill_item.final_points = DeterministicScoringEngine.calculate_skill_points(
+        skill_item.evidence_score, grade, consistency_bonus=skill_item.consistency_bonus
+    )
+    passport.overall_score = DeterministicScoringEngine.overall_score([s.final_points for s in passport.skills])
 
     # Clean up pending quiz notice
     skill_item.signals = [s for s in skill_item.signals if "Quiz Pending" not in s]
@@ -378,28 +393,23 @@ def apply_quiz_grade(req: ApplyQuizRequest):
         passport.pillar_scores.weights_used = weights_used
         passport.overall_score = balanced_overall
     else:
-        passport.overall_score = round(sum(s.final_points for s in passport.skills) / max(1, len(passport.skills)))
+        passport.overall_score = DeterministicScoringEngine.overall_score([s.final_points for s in passport.skills])
 
-    # Record in audit log
     if passport.audit_log:
-        pct_text = f" ({req.percentage}%)" if req.percentage is not None else ""
         passport.audit_log.traces.append(AuditStep(
             step="CHALLENGE_TEST_COMPLETED",
             target=skill_item.name,
-            rule_applied=f"CHALLENGE_TEST{pct_text}_GRADE_{grade}(weight:{grade_weight})_FORMULA({skill_item.evidence_score}x{grade_weight}+{consistency_bonus})={skill_item.final_points}",
+            rule_applied=(
+                f"CHALLENGE_TEST({attempt.percentage}%)_GRADE_{grade}(weight:{grade_weight})_"
+                f"FORMULA({skill_item.evidence_score}x{grade_weight}+{skill_item.consistency_bonus})={skill_item.final_points}"
+            ),
             verdict_reached=skill_item.verdict.value,
             timestamp=datetime.now(timezone.utc).isoformat()
         ))
 
-    # Re-sign the passport with HMAC-SHA256
-    raw_dict = passport.model_dump()
-    raw_dict.pop("tamper_proof_hash", None)
-    raw_dict["issued_at"] = datetime.now(timezone.utc).isoformat()
-    passport.issued_at = raw_dict["issued_at"]
-    passport.tamper_proof_hash = CryptoSigner.sign_passport(raw_dict)
-
+    passport.issued_at = datetime.now(timezone.utc).isoformat()
+    passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
     return passport
-
 
 
 # --- Cryptographic Verification ---

@@ -112,7 +112,8 @@ class SkillPassportItem(BaseModel):
     level: str = "Beginner"  # Beginner, Intermediate, Advanced, Expert
     evidence_score: int = Field(ge=0, le=10, description="0-10 based on evidence hierarchy")
     test_grade: str = Field(description="A (10), B (8), C (6), D (4), E (2)")
-    final_points: int = Field(ge=0, le=100, description="evidence_score * grade_weight")
+    final_points: int = Field(ge=0, le=100, description="evidence_score * grade_weight + consistency_bonus, capped at 100")
+    consistency_bonus: int = Field(default=0, ge=0, description="Points added for evidence across repos / months (included in final_points)")
     proof_snippet: Optional[str] = None
     sample_code: Optional[str] = None
     authorship_pct: Optional[float] = None
@@ -169,6 +170,7 @@ class QuizResult(BaseModel):
     grade: str  # A, B, C, D, E
     grade_weight: int
     review: List[QuizReviewItem] = Field(default_factory=list, description="Answers revealed only after submission")
+    attempt_id: Optional[str] = Field(default=None, description="Server-side record of this graded attempt; pass to /api/quiz/apply")
 
 class AuditStep(BaseModel):
     step: str
@@ -233,8 +235,7 @@ class SimulationResult(BaseModel):
     resolved_refusals: List[str]
 
 class ApplyQuizRequest(BaseModel):
+    """The grade comes from the server's record of the attempt, never from the client."""
     passport: PassportDocument
-    skill: str
-    grade: str
-    percentage: Optional[float] = None
+    attempt_id: str
 

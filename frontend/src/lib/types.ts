@@ -15,6 +15,7 @@ export interface SkillPassportItem {
   evidence_score: number;
   test_grade: string;
   final_points: number;
+  consistency_bonus?: number;
   proof_snippet?: string | null;
   sample_code?: string | null;
   authorship_pct?: number | null;
@@ -126,6 +127,7 @@ export interface QuizResult {
   grade: string;
   grade_weight: number;
   review: QuizReviewItem[];
+  attempt_id?: string | null;
 }
 
 export interface AnalysisJob {

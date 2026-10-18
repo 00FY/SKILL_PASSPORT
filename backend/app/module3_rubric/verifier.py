@@ -273,9 +273,12 @@ class FourStateVerifier:
             if verdict == VerdictEnum.CONTRADICTED:
                 evidence_score = 1
                 final_points = CONTRADICTED_POINTS
+                consistency_bonus = 0
             elif verdict == VerdictEnum.CLAIMED_ONLY:
                 evidence_score = CLAIMED_ONLY_EVIDENCE
-                final_points = self.scoring.calculate_skill_points(evidence_score, CLAIMED_ONLY_GRADE)
+                grade = CLAIMED_ONLY_GRADE  # the grade actually used, so the displayed formula adds up
+                final_points = self.scoring.calculate_skill_points(evidence_score, grade)
+                consistency_bonus = 0
             else:
                 final_points = self.scoring.calculate_skill_points(evidence_score, grade, consistency_bonus=consistency_bonus)
                 if consistency_bonus > 0 and bonus_reasons:
@@ -328,6 +331,7 @@ class FourStateVerifier:
                     evidence_score=evidence_score,
                     test_grade=grade,
                     final_points=final_points,
+                    consistency_bonus=consistency_bonus,
                     proof_snippet=snippet_str,
                     sample_code=code_preview,
                     authorship_pct=skill_pct if has_code_blame else None,
@@ -381,10 +385,9 @@ class FourStateVerifier:
             if testing_skill is None:
                 return True  # framework without per-file evidence (e.g. go test): repo-level signal
             test_ev = FourStateVerifier._find_evidence(testing_skill, evidence_doc)
+            # Test evidence is merged across repositories upstream, so tests the candidate wrote in
+            # any analysed repo count here; tests written only by other people never do.
             if test_ev is not None and test_ev.lines_authored >= min_lines_for(testing_skill):
-                return True
-            # Multi-repo test signal merging: if ANY repo has tests for this skill's ecosystem
-            if len(evidence_doc.repo_urls or []) > 1:
                 return True
         return False
 
