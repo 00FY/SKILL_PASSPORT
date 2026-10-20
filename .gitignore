@@ -31,4 +31,5 @@ yarn-error.log*
 # Generated promo-video output from the brag skill
 brag-output/
 **/.sessions/
+**/.generated_tasks/
 

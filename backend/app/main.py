@@ -327,7 +327,10 @@ def start_assessment(req: StartAssessmentRequest):
         return adaptive_engine.start_session(
             skill=req.skill,
             passport_hash=req.passport_hash or "",
-            initial_verdict=req.initial_verdict
+            initial_verdict=req.initial_verdict,
+            candidate_name=req.candidate_name,
+            applied_role=req.applied_role,
+            repo_context=req.repo_context
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

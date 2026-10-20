@@ -66,10 +66,20 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
       s => s.name.toLowerCase() === skillName.toLowerCase()
     );
 
+    const repoContextStr = passport ? [
+      passport.github_username ? `GitHub: @${passport.github_username}` : '',
+      passport.repo_urls?.length ? `Repositories: ${passport.repo_urls.join(', ')}` : '',
+      skillItem?.reasoning ? `Evidence: ${skillItem.reasoning}` : '',
+      skillItem?.signals?.length ? `Signals: ${skillItem.signals.join('; ')}` : ''
+    ].filter(Boolean).join(' | ') : undefined;
+
     postJson<{ session_id: string; task: PublicTaskItem }>('/api/assessment/start', {
       skill: skillName,
       initial_verdict: skillItem?.verdict,
-      passport_hash: passport?.tamper_proof_hash || ''
+      passport_hash: passport?.tamper_proof_hash || '',
+      candidate_name: passport?.candidate_name,
+      applied_role: passport?.applied_role,
+      repo_context: repoContextStr
     })
       .then(res => {
         setSessionId(res.session_id);

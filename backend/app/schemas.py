@@ -267,6 +267,9 @@ class StartAssessmentRequest(BaseModel):
     skill: str
     passport_hash: Optional[str] = ""
     initial_verdict: Optional[str] = None
+    candidate_name: Optional[str] = None
+    applied_role: Optional[str] = None
+    repo_context: Optional[str] = None
 
 class TaskSubmissionRequest(BaseModel):
     session_id: str

@@ -9,6 +9,7 @@ from ..schemas import (
     TaskSubmissionRequest, StepEvaluationResult
 )
 from .question_bank import ADAPTIVE_QUESTION_BANK, get_adaptive_tasks_for_skill, generate_generic_adaptive_tasks
+from .dynamic_generator import DynamicQuestionGenerator
 from ..module1_extractor.injection_guard import PromptInjectionDefense
 
 BANNED_AST_NAMES = {
@@ -61,6 +62,7 @@ class AdaptiveAssessmentEngine:
         self.storage_dir = storage_dir
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.injection_guard = PromptInjectionDefense()
+        self.generator = DynamicQuestionGenerator()
 
     def _get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         if session_id in self.sessions:
@@ -102,7 +104,10 @@ class AdaptiveAssessmentEngine:
         self,
         skill: str,
         passport_hash: str = "",
-        initial_verdict: Optional[str] = None
+        initial_verdict: Optional[str] = None,
+        candidate_name: Optional[str] = None,
+        applied_role: Optional[str] = None,
+        repo_context: Optional[str] = None
     ) -> Dict[str, Any]:
         session_id = f"asmt_{uuid.uuid4().hex[:12]}"
 
@@ -114,12 +119,20 @@ class AdaptiveAssessmentEngine:
         else:
             start_diff = DifficultyTier.INTERMEDIATE
 
-        first_task = self._select_task(skill, StageType.COMPREHENSION, start_diff, set())
+        context = {
+            "candidate_name": candidate_name,
+            "applied_role": applied_role,
+            "repo_context": repo_context,
+            "initial_verdict": initial_verdict
+        }
+
+        first_task = self._select_task(skill, StageType.COMPREHENSION, start_diff, set(), context=context)
         self.sessions[session_id] = {
             "session_id": session_id,
             "skill": skill,
             "passport_hash": passport_hash,
             "initial_verdict": initial_verdict,
+            "context": context,
             "current_stage_idx": 0,
             "current_difficulty": start_diff,
             "seen_task_ids": {first_task["task_id"]},
@@ -218,8 +231,9 @@ class AdaptiveAssessmentEngine:
             )
 
         next_stage = STAGE_SEQUENCE[session["current_stage_idx"]]
+        context = session.get("context", {})
         next_task = self._select_task(
-            session["skill"], next_stage, next_diff, session["seen_task_ids"]
+            session["skill"], next_stage, next_diff, session["seen_task_ids"], context=context
         )
         session["seen_task_ids"].add(next_task["task_id"])
         self._save_session(req.session_id)
@@ -357,6 +371,8 @@ class AdaptiveAssessmentEngine:
         return pct, grade
 
     def _get_task_by_id(self, skill: str, task_id: str) -> Dict[str, Any]:
+        if hasattr(self, "generator") and task_id in self.generator.memory_cache:
+            return self.generator.memory_cache[task_id]
         tasks = get_adaptive_tasks_for_skill(skill)
         for t in tasks:
             if t["task_id"] == task_id:
@@ -372,32 +388,16 @@ class AdaptiveAssessmentEngine:
         skill: str,
         stage_type: StageType,
         difficulty: DifficultyTier,
-        seen_task_ids: set
+        seen_task_ids: set,
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        tasks = get_adaptive_tasks_for_skill(skill)
-        stage_tasks = [
-            t for t in tasks
-            if t["stage_type"] == stage_type.value and t["task_id"] not in seen_task_ids
-        ]
-        if not stage_tasks:
-            stage_tasks = [t for t in tasks if t["stage_type"] == stage_type.value]
-
-        # 1. Exact difficulty match
-        diff_matches = [t for t in stage_tasks if t["difficulty"] == difficulty.value]
-        if diff_matches:
-            return diff_matches[0]
-
-        # 2. Closest available difficulty
-        if stage_tasks:
-            stage_tasks.sort(key=lambda t: abs(t["difficulty"] - difficulty.value))
-            return stage_tasks[0]
-
-        # 3. Dynamic generic fallback
-        fallbacks = generate_generic_adaptive_tasks(skill)
-        for t in fallbacks:
-            if t["stage_type"] == stage_type.value and t["difficulty"] == difficulty.value:
-                return t
-        return fallbacks[0]
+        return self.generator.generate_task(
+            skill=skill,
+            stage_type=stage_type,
+            difficulty=difficulty,
+            context=context or {},
+            seen_task_ids=seen_task_ids
+        )
 
     def _to_public(self, task: Dict[str, Any]) -> PublicTaskItem:
         return PublicTaskItem(
