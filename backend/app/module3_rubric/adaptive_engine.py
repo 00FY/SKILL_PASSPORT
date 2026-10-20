@@ -2,7 +2,6 @@ import os
 import json
 import ast
 import uuid
-import concurrent.futures
 from typing import Dict, Any, List, Optional
 from ..schemas import (
     StageType, DifficultyTier, PublicTaskItem,
@@ -10,6 +9,7 @@ from ..schemas import (
 )
 from .question_bank import ADAPTIVE_QUESTION_BANK, get_adaptive_tasks_for_skill, generate_generic_adaptive_tasks
 from ..module1_extractor.injection_guard import PromptInjectionDefense
+from .sandbox import CodeSandbox
 
 BANNED_AST_NAMES = {
     "os", "sys", "subprocess", "socket", "shutil", "pathlib", "open", "eval", "exec", "__import__",
@@ -18,37 +18,6 @@ BANNED_AST_NAMES = {
 BANNED_ATTRIBUTES = {"__subclasses__", "__globals__", "__code__", "__builtins__"}
 STAGE_SEQUENCE = [StageType.COMPREHENSION, StageType.DEBUGGING, StageType.CODING, StageType.REASONING]
 DIFFICULTY_WEIGHTS = {1: 1.0, 2: 1.5, 3: 2.2}
-MAX_LOOP_ITERATIONS = 200_000
-
-
-class LoopLimiter(ast.NodeTransformer):
-    """
-    Injects an iteration counter check into every loop body (while, for)
-    to terminate runaway/infinite loops in-thread without hanging worker threads.
-    """
-    def visit_For(self, node):
-        self.generic_visit(node)
-        check_call = ast.Expr(
-            value=ast.Call(
-                func=ast.Name(id="__check_loop_iter__", ctx=ast.Load()),
-                args=[],
-                keywords=[]
-            )
-        )
-        node.body.insert(0, check_call)
-        return node
-
-    def visit_While(self, node):
-        self.generic_visit(node)
-        check_call = ast.Expr(
-            value=ast.Call(
-                func=ast.Name(id="__check_loop_iter__", ctx=ast.Load()),
-                args=[],
-                keywords=[]
-            )
-        )
-        node.body.insert(0, check_call)
-        return node
 
 
 class AdaptiveAssessmentEngine:
@@ -57,8 +26,9 @@ class AdaptiveAssessmentEngine:
     AST-sandboxed test execution, and deterministic rubric evaluations.
     """
 
-    def __init__(self, storage_dir: Optional[str] = None):
+    def __init__(self, storage_dir: Optional[str] = None, sandbox: Optional[CodeSandbox] = None):
         self.storage_dir = storage_dir
+        self.sandbox = sandbox or CodeSandbox()
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.injection_guard = PromptInjectionDefense()
 
@@ -254,61 +224,26 @@ class AdaptiveAssessmentEngine:
             if isinstance(node, ast.Attribute) and node.attr in BANNED_ATTRIBUTES:
                 return 0.0, [], f"Security policy: Restricted attribute '{node.attr}' detected."
 
-        # Transform AST to inject loop iteration checks
-        tree = LoopLimiter().visit(tree)
-        ast.fix_missing_locations(tree)
-
-        iter_counter = [0]
-        def check_loop_iter():
-            iter_counter[0] += 1
-            if iter_counter[0] > MAX_LOOP_ITERATIONS:
-                raise RuntimeError("Execution stopped: loop iteration limit exceeded")
-
-        safe_builtins = {
-            "len": len, "range": range, "min": min, "max": max, "sum": sum,
-            "abs": abs, "enumerate": enumerate, "zip": zip, "list": list,
-            "dict": dict, "set": set, "tuple": tuple, "sorted": sorted,
-            "int": int, "str": str, "float": float, "bool": bool,
-            "all": all, "any": any, "round": round, "reversed": reversed,
-            "map": map, "filter": filter,
-            "__check_loop_iter__": check_loop_iter
-        }
-        namespace: Dict[str, Any] = {"__builtins__": safe_builtins}
-        try:
-            exec(compile(tree, filename="<candidate_code>", mode="exec"), namespace)
-        except Exception as e:
-            return 0.0, [], f"Runtime error during definition: {type(e).__name__}: {e}"
-
-        candidate_fn = namespace.get(fn_name)
-        if not callable(candidate_fn):
-            return 0.0, [], f"Function `{fn_name}` was not found or is not callable."
+        # Candidate code only ever runs in a separate sandboxed process (see sandbox.py).
+        # The checks above are an early, readable rejection, not the security boundary.
+        # SandboxUnavailable propagates so the step is not recorded and can be resubmitted
+        run = self.sandbox.run(code, fn_name, [list(t.get("args", [])) for t in tests])
+        if run.definition_error:
+            return 0.0, [], run.definition_error
 
         results = []
         passed_count = 0
-        for idx, t in enumerate(tests, 1):
-            iter_counter[0] = 0
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            try:
-                def run_single():
-                    copied_args = [
-                        arg.copy() if isinstance(arg, (list, dict)) else arg
-                        for arg in t.get("args", [])
-                    ]
-                    return candidate_fn(*copied_args)
-
-                future = executor.submit(run_single)
-                actual = future.result(timeout=2.0)
-
-                ok = (actual == t.get("expected"))
-                if ok:
-                    passed_count += 1
-                results.append({"test_case": idx, "passed": ok, "expected": t.get("expected"), "actual": actual})
-            except concurrent.futures.TimeoutError:
-                results.append({"test_case": idx, "passed": False, "error": "Execution timed out (limit: 2.0s)"})
-            except Exception as e:
-                results.append({"test_case": idx, "passed": False, "error": f"{type(e).__name__}: {e}"})
-            finally:
-                executor.shutdown(wait=False, cancel_futures=True)
+        for idx, (t, entry) in enumerate(zip(tests, run.results), 1):
+            kind = entry.get("kind")
+            if kind == "error":
+                results.append({"test_case": idx, "passed": False, "error": entry.get("error", "Unknown error")})
+                continue
+            ok_value, actual = CodeSandbox.decode(entry)
+            # A value that could not be sent back as JSON (e.g. a set) is shown but never matches
+            ok = ok_value and kind == "json" and actual == t.get("expected")
+            if ok:
+                passed_count += 1
+            results.append({"test_case": idx, "passed": ok, "expected": t.get("expected"), "actual": actual})
 
         score = round(passed_count / len(tests), 2) if tests else 0.0
         return score, results, f"Passed {passed_count}/{len(tests)} automated test cases."

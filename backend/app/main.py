@@ -26,6 +26,7 @@ from .module2_harvester import (
 from .module2_harvester.repo_source import local_repos_allowed
 from .module2_harvester.harvester_service import MAX_REPOS
 from .module4_certs import CertificateParser
+from .module3_rubric.sandbox import SandboxUnavailable
 from .module3_rubric import (
     PassportService, QuestionBankEngine, QuizAttemptStore, CryptoSigner, GRADE_WEIGHTS,
     AdaptiveAssessmentEngine, CONTRADICTED_POINTS, DeterministicScoringEngine
@@ -357,6 +358,8 @@ def submit_assessment_step(req: TaskSubmissionRequest):
         return res
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except SandboxUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Assessment step evaluation failed: {e}")
 
