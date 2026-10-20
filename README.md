@@ -163,6 +163,15 @@ One screen answering "can I trust this resume?":
 * **Starter pytest file:** a generic FastAPI test file to adapt.
 * **Skill challenges:** a 15-question quiz (Python, Docker) that can be opened from a skill that isn't verified. The grade is shown only and isn't added to the signed passport.
 
+### 🛡️ Defend Your Code (optional)
+A general quiz shows someone *knows* Python; it can't show they *wrote* the code credited to them. Defend Your Code asks about the candidate's own functions:
+
+* **During the analysis**, Python functions where `git blame` credits the candidate with at least 60% of the lines (8–60 lines, real logic, not tests) are run in the sandbox on generated inputs. Literal constants and helpers from the same file travel with them, and inputs prefer values the code itself mentions (e.g. a lookup table's keys).
+* Each function that returns a value becomes a question: *"What does `count_done(['done', 'archived', 'done'])` return?"* The wrong options are the same function's real outputs on other inputs. Long results are asked about one field, e.g. `get_hub_by_name('Hyderabad (Shamshabad)')['id']`.
+* **One attempt per passport**, one question at a time, 90 seconds each (180 with extended time, noted in the audit trail). Answers stay on the server. Pastes and tab switches are recorded, never used to fail anyone.
+* **Result on that skill's code points:** ≥ 80% correct → **+5** (max 100) and *Authorship confirmed ✓*; < 40% → **× 0.4** and *Couldn't explain own code*; anything else, or not taking it → no change. The passport is re-signed and the commit the questions came from is recorded.
+* Offered only for Python skills with code evidence (never for CONTRADICTED), and only when at least `SKILL_PASSPORT_DEFEND_MIN_QUESTIONS` (default 3) questions could be built; otherwise the skill shows why.
+
 ---
 
 ## 🚀 Quick Start & Local Installation
@@ -220,6 +229,7 @@ Open [http://localhost:3000](http://localhost:3000), then click **Analyze a resu
 | `SKILL_PASSPORT_SANDBOX` | `process` | Where assessment code runs. `process`: a separate, isolated Python process with CPU, memory, file and process limits (kernel limits are Linux/macOS only). `docker`: a container with no network, a read-only filesystem and no capabilities. Use `docker` on any server other people can reach. |
 | `SKILL_PASSPORT_SANDBOX_IMAGE` | `python:3.11-slim` | Image used in `docker` mode. |
 | `SKILL_PASSPORT_ASSESSMENT_ATTEMPTS` | `2` | Adaptive assessment attempts per passport and skill. |
+| `SKILL_PASSPORT_DEFEND_MIN_QUESTIONS` | `3` | Fewest Defend Your Code questions needed before the test is offered. |
 
 ### 5. API overview
 
@@ -231,6 +241,7 @@ Open [http://localhost:3000](http://localhost:3000), then click **Analyze a resu
 | `POST /api/verify-signature` | Check that a passport JSON hasn't been altered. |
 | `POST /api/simulate` | What-if recalculation (not signed). |
 | `GET /api/quiz/{skill}`, `POST /api/quiz/submit` | Skill challenges. Answers are revealed only after submission. |
+| `POST /api/defend/start` → `POST /api/defend/answer` → `POST /api/defend/apply` | Defend Your Code: start for a signed passport, answer one question at a time, apply the result (re-signed). |
 | `GET /api/demo/{priya\|alex\|jordan\|redteam}` | Demo passports, signed with `evidence_source: "demo"`. |
 
 Analysis endpoints are rate-limited per client and optionally protected by an API key (see Configuration).
@@ -258,4 +269,5 @@ PYTHONPATH=backend pytest tests backend/tests -v
 * Background jobs and rate-limit counters live in memory: they reset on restart and aren't shared between server processes. Use one process, or put the limits in your reverse proxy.
 * Quiz grades are shown to the candidate but aren't added to the signed passport.
 * Only the 100 most recent closed pull requests are checked for merged PRs.
+* Defend Your Code covers Python only, and only functions that run on their own (plus literal constants and same-file helpers). Code that needs imports, files, databases or objects is skipped, so many real projects yield only a few questions. Its questions live in server memory: after a restart, re-run the analysis to offer it again.
 * Very large repositories are analysed within the blame time budget, so authorship may be measured on a subset of files (flagged in the passport warnings).

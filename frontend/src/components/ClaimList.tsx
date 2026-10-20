@@ -197,6 +197,16 @@ const ClaimRowItem: React.FC<{ row: ClaimRow; onOpenSkill: (s: SkillPassportItem
                 Quiz Pending
               </span>
             )}
+            {row.skill?.authorship_check?.status === 'confirmed' && (
+              <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                Authorship confirmed ✓
+              </span>
+            )}
+            {row.skill?.authorship_check?.status === 'not_explained' && (
+              <span className="rounded border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-300">
+                Couldn't explain own code
+              </span>
+            )}
           </div>
           <div className="truncate text-sm text-zinc-400">{row.reason}</div>
         </div>

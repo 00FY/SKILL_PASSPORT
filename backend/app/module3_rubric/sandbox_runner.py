@@ -17,6 +17,8 @@ SAFE_BUILTIN_NAMES = (
     "len", "range", "min", "max", "sum", "abs", "enumerate", "zip", "list", "dict", "set", "tuple",
     "sorted", "int", "str", "float", "bool", "all", "any", "round", "reversed", "map", "filter",
     "isinstance", "ValueError", "TypeError", "KeyError", "IndexError", "Exception",
+    "print", "repr", "ord", "chr", "divmod", "pow", "bin", "hex", "frozenset", "ArithmeticError",
+    "LookupError", "RuntimeError", "ZeroDivisionError", "AttributeError", "NotImplementedError", "StopIteration",
 )
 
 

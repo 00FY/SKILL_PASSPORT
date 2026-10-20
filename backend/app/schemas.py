@@ -111,8 +111,21 @@ class EvidenceDocument(BaseModel):
     excluded_repos: List[ExcludedRepo] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     raw_audit_notes: List[str] = Field(default_factory=list)
+    # Candidate-written Python functions for "Defend Your Code"; server-side only, never serialised
+    authored_functions: List[Dict[str, Any]] = Field(default_factory=list, exclude=True)
 
 # --- Module 3: Rubric, Verdicts & Passport ---
+class AuthorshipCheck(BaseModel):
+    """Defend Your Code: whether the candidate could explain functions `git blame` says they wrote."""
+    status: str  # available | unavailable | confirmed | inconclusive | not_explained
+    reason: Optional[str] = None
+    question_count: int = 0
+    correct: Optional[int] = None
+    total: Optional[int] = None
+    points_effect: int = 0  # Change applied to final_points (+bonus, or a negative reduction)
+    commits: List[str] = Field(default_factory=list)  # repo@sha the questions were taken from
+
+
 class SkillPassportItem(BaseModel):
     name: str
     category: str = "language"
@@ -128,6 +141,7 @@ class SkillPassportItem(BaseModel):
     files_count: Optional[int] = None
     signals: List[str] = Field(default_factory=list)
     reasoning: Optional[str] = None
+    authorship_check: Optional[AuthorshipCheck] = None
 
 class RefusalItem(BaseModel):
     claim: str
@@ -302,3 +316,23 @@ class StepEvaluationResult(BaseModel):
     attempt_id: Optional[str] = None             # Recorded quiz attempt ID for passport application
 
 
+
+
+# --- Defend Your Code ---
+class DefendStartRequest(BaseModel):
+    passport: PassportDocument
+    skill: str = "Python"
+    extended_time: bool = False
+
+
+class DefendAnswerRequest(BaseModel):
+    session_id: str
+    question_id: str
+    choice: Optional[int] = None
+    pastes: int = 0         # Browser-reported, recorded only
+    tab_switches: int = 0   # Browser-reported, recorded only
+
+
+class DefendApplyRequest(BaseModel):
+    passport: PassportDocument
+    attempt_id: str

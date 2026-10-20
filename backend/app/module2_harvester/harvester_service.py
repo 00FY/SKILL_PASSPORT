@@ -11,6 +11,7 @@ from .ast_analyzer import ASTAnalyzer
 from .test_detector import TestDetector
 from .fork_detector import ForkAndTemplateDetector
 from .github_api import GitHubClient, RATE_LIMITED
+from .function_picker import pick_functions
 from .repo_source import (
     RepoRef, RepoSourceError, RepoAccessError, parse_repo_source, clone_repo, local_repos_allowed
 )
@@ -221,6 +222,7 @@ class EvidenceHarvesterService:
             signals=signals,
             warnings=warnings,
             raw_audit_notes=notes,
+            authored_functions=pick_functions(path, per_file, ref.url, blame_res.get("head_sha", "")),
         )
 
     @staticmethod
@@ -363,4 +365,5 @@ def merge_evidence(docs: List[EvidenceDocument]) -> EvidenceDocument:
         excluded_repos=excluded,
         warnings=[w for d in docs for w in d.warnings],
         raw_audit_notes=[n for d in docs for n in d.raw_audit_notes],
+        authored_functions=[f for d in clean for f in d.authored_functions],
     )

@@ -31,7 +31,13 @@ export const pointsFormula = (skill: SkillPassportItem): string => {
   const weight = GRADE_WEIGHT[skill.test_grade] ?? 6;
   const bonus = skill.consistency_bonus ?? 0;
   const raw = skill.evidence_score * weight + bonus;
+  const effect = skill.authorship_check?.points_effect ?? 0;
+  const base = skill.final_points - effect;
   const bonusPart = bonus > 0 ? ` + ${bonus} consistency bonus` : '';
-  const capPart = raw > 100 ? ` = ${raw}, capped at ${skill.final_points}` : ` = ${skill.final_points}`;
-  return `Evidence ${skill.evidence_score}/10 × grade ${skill.test_grade} (${weight})${bonusPart}${capPart} points`;
+  const capPart = raw > 100 ? ` = ${raw}, capped at ${base}` : ` = ${base}`;
+  const formula = `Evidence ${skill.evidence_score}/10 × grade ${skill.test_grade} (${weight})${bonusPart}${capPart} points`;
+  const status = skill.authorship_check?.status;
+  if (status === 'confirmed') return `${formula}, + ${effect} for explaining their own code = ${skill.final_points} points`;
+  if (status === 'not_explained') return `${formula}, × 0.4 for not explaining their own code = ${skill.final_points} points`;
+  return formula;
 };
