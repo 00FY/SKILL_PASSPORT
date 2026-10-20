@@ -47,6 +47,41 @@ export async function waitForJob<T extends { status: string; message: string; er
     if (job.status === 'done') return job;
     if (job.status === 'failed') throw new ApiError(job.error || 'Analysis failed.');
     onProgress(job.message);
-    await sleep(intervalMs);
   }
 }
+
+export interface DiscoveredProfile {
+  username: string;
+  name?: string | null;
+  bio?: string | null;
+  avatar_url?: string | null;
+  public_repos_count: number;
+  repo_urls: string[];
+  detected_languages: string[];
+  topics: string[];
+  warnings: string[];
+}
+
+export interface CertificateEvidence {
+  id: string;
+  filename: string;
+  certificate_name: string;
+  issuer: string;
+  candidate_name?: string | null;
+  issue_date?: string | null;
+  credential_id?: string | null;
+  verify_url?: string | null;
+  skills: string[];
+  confidence_score: number;
+  raw_text_snippet?: string | null;
+}
+
+export const discoverRepos = (username: string) =>
+  postJson<DiscoveredProfile>('/api/discover-repos', { username });
+
+export const uploadCert = async (file: File, candidateName?: string): Promise<CertificateEvidence> => {
+  const form = new FormData();
+  form.append('file', file);
+  if (candidateName) form.append('candidate_name', candidateName);
+  return request<CertificateEvidence>('/api/upload-cert', { method: 'POST', body: form });
+};

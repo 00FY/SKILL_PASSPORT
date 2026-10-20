@@ -126,9 +126,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
           try {
             const updated = await postJson<PassportDocument>('/api/quiz/apply', {
               passport,
-              skill: skillName,
-              grade: res.final_grade,
-              percentage: res.final_weighted_score,
+              attempt_id: res.attempt_id,
               trajectory: res.trajectory
             });
             setAppliedPassport(updated);

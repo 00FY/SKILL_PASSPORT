@@ -28,7 +28,7 @@ jobs:
 
       - name: Run Engine & Module Unit Tests
         env:
-          PYTHONPATH: backend
+          PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}
         run: |
           pytest tests/ backend/tests/ -v
 

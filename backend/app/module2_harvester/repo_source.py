@@ -53,6 +53,12 @@ def parse_repo_source(source: str, allow_local: bool = False) -> RepoRef:
     if not raw:
         raise RepoSourceError("Repository URL is empty.")
 
+    if re.match(r"^[a-zA-Z]:[\\/]", raw) or raw.startswith(("\\\\", "/", "./", "../")):
+        if allow_local and os.path.isdir(raw):
+            path = os.path.abspath(raw)
+            return RepoRef(url=raw, local_path=path, name=os.path.basename(path.rstrip(os.sep)))
+        raise RepoSourceError(f"Local repository paths are not allowed: '{raw}'. Link an https:// repository.")
+
     if allow_local and os.path.isdir(raw):
         path = os.path.abspath(raw)
         return RepoRef(url=raw, local_path=path, name=os.path.basename(path.rstrip(os.sep)))

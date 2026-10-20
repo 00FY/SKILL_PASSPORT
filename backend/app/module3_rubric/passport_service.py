@@ -7,7 +7,7 @@ from ..schemas import (
 from .verifier import FourStateVerifier
 from .audit_tracer import AuditTracer
 from .crypto_signer import CryptoSigner
-from .scoring_engine import DeterministicScoringEngine, EVIDENCE_WEIGHTS
+from .scoring_engine import DeterministicScoringEngine, EVIDENCE_WEIGHTS, GRADE_WEIGHTS
 from ..skills import skill_spec
 
 class PassportService:
@@ -19,7 +19,8 @@ class PassportService:
         claims_doc: ClaimsDocument,
         evidence_doc: EvidenceDocument,
         challenge_grades: Optional[Dict[str, str]] = None,
-        evidence_source: str = "harvested"
+        evidence_source: str = "harvested",
+        github_username: Optional[str] = None
     ) -> PassportDocument:
         """
         Only call this with evidence the server harvested itself (or clearly labelled demo data):
@@ -33,59 +34,88 @@ class PassportService:
             verdict_reached="SUCCESS"
         )
 
-        skills, refusals, learning_plan, role_match_pct, overall_score = self.verifier.evaluate(
+        skills, refusals, learning_plan, role_match_pct, raw_overall_score = self.verifier.evaluate(
             claims_doc=claims_doc,
             evidence_doc=evidence_doc,
             audit_tracer=audit,
-            challenge_grades=challenge_grades
+            challenge_grades=challenge_grades if challenge_grades is not None else {}
+        )
+
+        # 4-Pillar Balanced Scoring:
+        # Pillar 1: Code Profile score
+        code_skills = [s for s in skills if s.authorship_pct is not None or s.evidence_score >= 7]
+        code_score: Optional[int] = None
+        if evidence_doc.signals.commit_count > 0 or code_skills:
+            code_score = round(sum(s.final_points for s in skills) / max(1, len(skills)))
+
+        # Pillar 2: Resume / Bio score (None if candidate did not provide a resume)
+        has_resume = (claims_doc.raw_text_length or 0) > 0
+        resume_score: Optional[int] = role_match_pct if has_resume else None
+
+        # Pillar 3: Certificate score (None if no certificates uploaded)
+        cert_score: Optional[int] = None
+        if claims_doc.certificates:
+            cert_sum = sum(min(1.0, c.confidence_score) * 50 for c in claims_doc.certificates)
+            cert_score = round(min(100, max(20, cert_sum)))
+
+        # Pillar 4: Mandatory Quiz score
+        tested_skills = [s for s in skills if challenge_grades and s.name.lower() in {k.lower(): v for k, v in challenge_grades.items()}]
+        if tested_skills:
+            quiz_weights = [GRADE_WEIGHTS.get(s.test_grade, 6) * 10 for s in tested_skills]
+            quiz_score = round(sum(quiz_weights) / len(quiz_weights))
+        else:
+            quiz_score = 20  # Base level (Grade E) until quizzes are attempted
+
+        balanced_overall, weights_used = DeterministicScoringEngine.calculate_pillar_scores(
+            code_score=code_score,
+            resume_score=resume_score,
+            cert_score=cert_score,
+            quiz_score=quiz_score
+        )
+
+        from ..schemas import PillarScores
+        pillar_scores = PillarScores(
+            code_score=code_score,
+            resume_score=resume_score,
+            cert_score=cert_score,
+            quiz_score=quiz_score,
+            overall_score=balanced_overall,
+            weights_used=weights_used
         )
 
         audit_log = audit.finalize()
 
-        passport_dict = {
-            "evidence_source": evidence_source,
-            "candidate_name": claims_doc.candidate_name,
-            "applied_role": claims_doc.applied_role,
-            "role_match_pct": role_match_pct,
-            "overall_score": overall_score,
-            "candidate_authorship_pct": evidence_doc.candidate_authorship_pct,
-            "active_months": evidence_doc.active_months,
-            "total_commits": evidence_doc.signals.commit_count,
-            "repo_url": evidence_doc.repo_url,
-            "repo_urls": evidence_doc.repo_urls,
-            "is_fork": evidence_doc.is_fork,
-            "skills": [s.model_dump() for s in skills],
-            "refusal_panel": [r.model_dump() for r in refusals],
-            "learning_plan": [lp.model_dump() for lp in learning_plan],
-            "security_alerts": [sf.model_dump() for sf in claims_doc.security_flags],
-            "warnings": evidence_doc.warnings,
-            "issued_at": datetime.now(timezone.utc).isoformat()
-        }
+        issued_at_str = datetime.now(timezone.utc).isoformat()
 
-        # Cryptographically sign the passport
-        signature_hash = CryptoSigner.sign_passport(passport_dict)
-
-        return PassportDocument(
+        passport = PassportDocument(
             evidence_source=evidence_source,
             candidate_name=claims_doc.candidate_name,
             applied_role=claims_doc.applied_role,
             role_match_pct=role_match_pct,
-            overall_score=overall_score,
+            overall_score=balanced_overall,
             candidate_authorship_pct=evidence_doc.candidate_authorship_pct,
             active_months=evidence_doc.active_months,
             total_commits=evidence_doc.signals.commit_count,
             repo_url=evidence_doc.repo_url,
             repo_urls=evidence_doc.repo_urls,
+            github_username=github_username,
             is_fork=evidence_doc.is_fork,
             skills=skills,
             refusal_panel=refusals,
             learning_plan=learning_plan,
             security_alerts=claims_doc.security_flags,
             warnings=evidence_doc.warnings,
-            tamper_proof_hash=signature_hash,
-            issued_at=passport_dict["issued_at"],
+            pillar_scores=pillar_scores,
+            certificates=claims_doc.certificates,
+            tamper_proof_hash="",
+            issued_at=issued_at_str,
             audit_log=audit_log
         )
+
+        passport_dict = passport.model_dump()
+        signature_hash = CryptoSigner.sign_passport(passport_dict)
+        passport.tamper_proof_hash = signature_hash
+        return passport
 
     def simulate_what_if(self, req: SimulationRequest) -> SimulationResult:
         """
@@ -121,7 +151,9 @@ class PassportService:
             if author_more and s.verdict == VerdictEnum.PARTIALLY_SUPPORTED:
                 s.verdict = VerdictEnum.VERIFIED
                 s.signals.append("Simulated: sustained authorship over 3+ months")
-            s.final_points = DeterministicScoringEngine.calculate_skill_points(s.evidence_score, s.test_grade)
+            s.final_points = DeterministicScoringEngine.calculate_skill_points(
+                s.evidence_score, s.test_grade, consistency_bonus=s.consistency_bonus
+            )
 
         if add_tests:
             for r in list(remaining_refusals):

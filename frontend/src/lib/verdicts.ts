@@ -1,4 +1,4 @@
-import { Verdict } from './types';
+import { SkillPassportItem, Verdict } from './types';
 
 export const VERDICT_LABEL: Record<Verdict, string> = {
   VERIFIED: 'Verified by code',
@@ -19,4 +19,19 @@ export const VERDICT_ORDER: Record<Verdict, number> = {
   PARTIALLY_SUPPORTED: 1,
   CLAIMED_ONLY: 2,
   CONTRADICTED: 3,
+};
+
+export const GRADE_WEIGHT: Record<string, number> = { A: 10, B: 8, C: 6, D: 4, E: 2 };
+
+/** The points formula exactly as the backend applies it, so the numbers on screen add up. */
+export const pointsFormula = (skill: SkillPassportItem): string => {
+  if (skill.verdict === 'CONTRADICTED') {
+    return `Contradicted by repository evidence: fixed ${skill.final_points} points`;
+  }
+  const weight = GRADE_WEIGHT[skill.test_grade] ?? 6;
+  const bonus = skill.consistency_bonus ?? 0;
+  const raw = skill.evidence_score * weight + bonus;
+  const bonusPart = bonus > 0 ? ` + ${bonus} consistency bonus` : '';
+  const capPart = raw > 100 ? ` = ${raw}, capped at ${skill.final_points}` : ` = ${skill.final_points}`;
+  return `Evidence ${skill.evidence_score}/10 × grade ${skill.test_grade} (${weight})${bonusPart}${capPart} points`;
 };

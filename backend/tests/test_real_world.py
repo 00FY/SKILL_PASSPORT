@@ -262,7 +262,9 @@ def test_cross_repo_weighted_authorship_and_consistency_bonus():
                 repo_count=1,
                 active_months=4,
                 distinct_months=["2024-03", "2024-04", "2024-05", "2024-06"],
-            )
+            ),
+            # Tests the candidate wrote in repo 2
+            "Testing (pytest)": SkillEvidence(lines_authored=40, total_lines=40, authorship_pct=100.0, files_count=2),
         },
         signals=QualitySignals(has_tests=True, test_frameworks=["pytest"], test_file_count=2, commit_count=20, candidate_commit_count=20),
     )
@@ -280,7 +282,7 @@ def test_cross_repo_weighted_authorship_and_consistency_bonus():
     assert py_ev.active_months == 6
     assert py_ev.distinct_months == ["2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06"]
 
-    # Improvement 3: Multi-repo test signal merging -> repo 2 had tests for Python ecosystem, so merged has tests
+    # Improvement 3: Multi-repo test signal merging -> the candidate's tests in repo 2 credit Python merged from both repos
     claims = ClaimsDocument(candidate_name="U", applied_role="Dev", claims=[
         ClaimItem(id="1", skill="Python", category="language", claimed_duration_months=12)
     ])
@@ -288,11 +290,12 @@ def test_cross_repo_weighted_authorship_and_consistency_bonus():
     skills, refusals, _, _, _ = verifier.evaluate(claims, merged, AuditTracer("U"), challenge_grades={"Python": "B"})
 
     py_skill = next(s for s in skills if s.name == "Python")
-    # Base evidence score = 8 (tests verified because repo 2 had pytest for Python ecosystem)
+    # Base evidence score = 8 (candidate-written pytest tests in repo 2)
     # Challenge Grade B weight = 8 -> Base points = 8 * 8 = 64
     # Improvement 4: Consistency bonus (+5 for 2 repos, +3 for 6 months) = +8 bonus -> 64 + 8 = 72 points
     assert py_skill.evidence_score == 8
     assert py_skill.final_points == 72
+    assert py_skill.consistency_bonus == 8
     assert "+5 pts consistency bonus" in py_skill.reasoning
     assert "+3 pts consistency bonus" in py_skill.reasoning
 
@@ -467,21 +470,23 @@ def test_quiz_for_fastapi_and_applying_grade_updates_passport():
     assert fastapi_skill["test_grade"] == "B"
     previous_points = fastapi_skill["final_points"]
 
-    # Apply Grade A to FastAPI
-    apply_res = client.post("/api/quiz/apply", json={
-        "passport": priya_passport,
-        "skill": "FastAPI",
-        "grade": "A",
-        "percentage": 100.0
-    })
+    # Earn Grade A by answering the FastAPI challenge correctly (server-side answer key)
+    from app.module3_rubric.question_bank import SAMPLE_QUIZZES
+    answers = {q.id: q.correct_index for q in SAMPLE_QUIZZES["FastAPI"]}
+    result = client.post("/api/quiz/submit", json={"skill": "FastAPI", "answers": answers}).json()
+    assert result["grade"] == "A" and result["attempt_id"]
+
+    apply_res = client.post("/api/quiz/apply", json={"passport": priya_passport, "attempt_id": result["attempt_id"]})
     assert apply_res.status_code == 200
     updated_passport = apply_res.json()
     updated_fa = next(s for s in updated_passport["skills"] if s["name"] == "FastAPI")
 
     assert updated_fa["test_grade"] == "A"
-    # Evidence score 10 * Grade A (10) + 3 consistency bonus = 100 points
+    # Evidence score 10 * Grade A (10) + 3 consistency bonus = 103, capped at 100
+    assert updated_fa["consistency_bonus"] == 3
     assert updated_fa["final_points"] == 100
     assert updated_fa["final_points"] > previous_points
+    assert updated_passport["evidence_source"] == "demo"
 
     # Audit log trace updated
     assert any(t["step"] == "CHALLENGE_TEST_COMPLETED" and "FastAPI" in t["target"] for t in updated_passport["audit_log"]["traces"])
@@ -625,3 +630,92 @@ def test_github_rate_limit_becomes_a_warning(username_repo):
     ref = RepoRef(url="https://github.com/sohamk234/demo", host="github.com", owner="sohamk234", name="demo")
     doc = svc._analyze_path(username_repo, ref, "Soham Kadam", ["sohamk234"])
     assert any("rate limit" in w and "GITHUB_TOKEN" in w for w in doc.warnings)
+
+
+# --- Skill challenge integrity -----------------------------------------------------------------
+
+def _earn(skill, correct=True):
+    from app.module3_rubric.question_bank import SAMPLE_QUIZZES
+    answers = {q.id: (q.correct_index if correct else (q.correct_index + 1) % len(q.options)) for q in SAMPLE_QUIZZES[skill]}
+    return client.post("/api/quiz/submit", json={"skill": skill, "answers": answers}).json()
+
+
+def test_quiz_apply_rejects_edited_passports():
+    """An edited passport must never come back with a valid signature (the forged-passport attack)."""
+    forged = client.get("/api/demo/alex").json()
+    forged.update(evidence_source="harvested", candidate_name="Mallory", overall_score=99, refusal_panel=[])
+    for s in forged["skills"]:
+        s.update(verdict="VERIFIED", evidence_score=10, final_points=100)
+    attempt = _earn("Python")["attempt_id"]
+    res = client.post("/api/quiz/apply", json={"passport": forged, "attempt_id": attempt})
+    assert res.status_code == 400 and "signature" in res.json()["detail"]
+
+
+def test_quiz_apply_needs_a_real_attempt():
+    jordan = client.get("/api/demo/jordan").json()
+    # A grade supplied by the client is ignored; without a server-recorded attempt nothing is applied
+    res = client.post("/api/quiz/apply", json={"passport": jordan, "skill": "Python", "grade": "A"})
+    assert res.status_code == 422
+    res = client.post("/api/quiz/apply", json={"passport": jordan, "attempt_id": "made-up"})
+    assert res.status_code == 400
+
+
+def test_quiz_attempt_is_single_use_and_grade_is_the_earned_one():
+    jordan = client.get("/api/demo/jordan").json()
+    poor = _earn("Python", correct=False)
+    assert poor["grade"] == "E"
+    first = client.post("/api/quiz/apply", json={"passport": jordan, "attempt_id": poor["attempt_id"]})
+    assert first.status_code == 200
+    py = next(s for s in first.json()["skills"] if s["name"] == "Python")
+    assert py["test_grade"] == "E" and py["final_points"] == 7 * 2
+    again = client.post("/api/quiz/apply", json={"passport": first.json(), "attempt_id": poor["attempt_id"]})
+    assert again.status_code == 400
+
+
+def test_quiz_apply_rejects_skill_not_in_passport_and_contradicted_skills():
+    jordan = client.get("/api/demo/jordan").json()
+    res = client.post("/api/quiz/apply", json={"passport": jordan, "attempt_id": _earn("React")["attempt_id"]})
+    assert res.status_code == 404
+    alex = client.get("/api/demo/alex").json()
+    res = client.post("/api/quiz/apply", json={"passport": alex, "attempt_id": _earn("Python")["attempt_id"]})
+    assert res.status_code == 409
+
+
+def test_tests_written_by_others_in_another_repo_give_no_credit():
+    own_code = EvidenceDocument(
+        repo_url="https://github.com/u/a", repo_urls=["https://github.com/u/a"], candidate_authorship_pct=90.0, active_months=8,
+        total_code_lines=500, candidate_code_lines=450,
+        skills_detected={"Python": SkillEvidence(lines_authored=450, total_lines=500, authorship_pct=90.0)},
+        signals=QualitySignals(commit_count=30, candidate_commit_count=30),
+    )
+    others_tests = EvidenceDocument(
+        repo_url="https://github.com/u/b", repo_urls=["https://github.com/u/b"], candidate_authorship_pct=40.0, active_months=8,
+        total_code_lines=300, candidate_code_lines=120,
+        skills_detected={"Python": SkillEvidence(lines_authored=120, total_lines=300, authorship_pct=40.0),
+                         "Testing (pytest)": SkillEvidence(lines_authored=0, total_lines=200, authorship_pct=0.0)},
+        signals=QualitySignals(has_tests=True, test_frameworks=["pytest"], test_file_count=4, commit_count=30, candidate_commit_count=12),
+    )
+    merged = merge_evidence([own_code, others_tests])
+    claims = ClaimsDocument(candidate_name="U", applied_role="Dev", claims=[ClaimItem(id="1", skill="Python")])
+    skills, _, _, _, _ = FourStateVerifier().evaluate(claims, merged, AuditTracer("U"))
+    py = skills[0]
+    assert py.evidence_score == 7  # own code, but no tests of their own
+    assert not any("tests found" in s.lower() for s in py.signals)
+
+
+def test_simulator_keeps_consistency_bonus():
+    priya = client.get("/api/demo/priya").json()
+    fa = next(s for s in priya["skills"] if s["name"] == "FastAPI")
+    assert fa["consistency_bonus"] == 3 and fa["final_points"] == 83
+    res = client.post("/api/simulate", json={"base_passport": priya, "toggles": {"sustained_commits": True}}).json()
+    assert next(s for s in res["updated_skills"] if s["name"] == "FastAPI")["final_points"] == 83
+
+
+def test_claimed_only_formula_shows_the_grade_actually_used():
+    jordan = client.get("/api/demo/jordan").json()
+    priya = client.get("/api/demo/priya").json()
+    for p in (jordan, priya):
+        for s in p["skills"]:
+            if s["verdict"] in ("VERIFIED", "PARTIALLY_SUPPORTED", "CLAIMED_ONLY"):
+                weight = {"A": 10, "B": 8, "C": 6, "D": 4, "E": 2}[s["test_grade"]]
+                assert s["final_points"] == min(100, s["evidence_score"] * weight + s["consistency_bonus"]), s

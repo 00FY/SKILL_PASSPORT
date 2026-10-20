@@ -24,10 +24,25 @@ class ClaimItem(BaseModel):
     claimed_detail: Optional[str] = None
     evidence_links: List[str] = Field(default_factory=list)
 
+class CertificateEvidence(BaseModel):
+    id: str
+    filename: str
+    certificate_name: str
+    issuer: str
+    candidate_name: Optional[str] = None
+    issue_date: Optional[str] = None
+    credential_id: Optional[str] = None
+    verify_url: Optional[str] = None
+    skills: List[str] = Field(default_factory=list)
+    confidence_score: float = 0.8
+    raw_text_snippet: Optional[str] = None
+
 class ClaimsDocument(BaseModel):
     candidate_name: str
     applied_role: str
     claims: List[ClaimItem] = Field(default_factory=list)
+    certificates: List[CertificateEvidence] = Field(default_factory=list)
+    github_profile: Optional[Dict[str, Any]] = None
     security_flags: List[SecurityFlag] = Field(default_factory=list)
     raw_text_length: int = 0
     sanitized_text_preview: Optional[str] = None
@@ -97,7 +112,8 @@ class SkillPassportItem(BaseModel):
     level: str = "Beginner"  # Beginner, Intermediate, Advanced, Expert
     evidence_score: int = Field(ge=0, le=10, description="0-10 based on evidence hierarchy")
     test_grade: str = Field(description="A (10), B (8), C (6), D (4), E (2)")
-    final_points: int = Field(ge=0, le=100, description="evidence_score * grade_weight")
+    final_points: int = Field(ge=0, le=100, description="evidence_score * grade_weight + consistency_bonus, capped at 100")
+    consistency_bonus: int = Field(default=0, ge=0, description="Points added for evidence across repos / months (included in final_points)")
     proof_snippet: Optional[str] = None
     sample_code: Optional[str] = None
     authorship_pct: Optional[float] = None
@@ -154,6 +170,7 @@ class QuizResult(BaseModel):
     grade: str  # A, B, C, D, E
     grade_weight: int
     review: List[QuizReviewItem] = Field(default_factory=list, description="Answers revealed only after submission")
+    attempt_id: Optional[str] = Field(default=None, description="Server-side record of this graded attempt; pass to /api/quiz/apply")
 
 class AuditStep(BaseModel):
     step: str
@@ -167,6 +184,14 @@ class RunAuditLog(BaseModel):
     candidate_name: str
     traces: List[AuditStep] = Field(default_factory=list)
     generated_at: str
+
+class PillarScores(BaseModel):
+    code_score: Optional[int] = Field(default=None, description="Score based on git blame, tests, authorship, commits (0-100)")
+    resume_score: Optional[int] = Field(default=None, description="Score based on resume claims verification (0-100)")
+    cert_score: Optional[int] = Field(default=None, description="Score based on verified certificates (0-100)")
+    quiz_score: Optional[int] = Field(default=None, description="Score based on mandatory skill challenge quizzes (0-100)")
+    overall_score: int = Field(description="Final balanced score across active pillars")
+    weights_used: Dict[str, float] = Field(default_factory=dict, description="Active pillar weights, e.g. code: 0.40, quiz: 0.25")
 
 class PassportDocument(BaseModel):
     evidence_source: str = Field(
@@ -182,12 +207,15 @@ class PassportDocument(BaseModel):
     total_commits: Optional[int] = 0
     repo_url: Optional[str] = None
     repo_urls: List[str] = Field(default_factory=list)
+    github_username: Optional[str] = None
     is_fork: Optional[bool] = False
     skills: List[SkillPassportItem] = Field(default_factory=list)
     refusal_panel: List[RefusalItem] = Field(default_factory=list)
     learning_plan: List[LearningPlanItem] = Field(default_factory=list)
     security_alerts: List[SecurityFlag] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+    pillar_scores: Optional[PillarScores] = None
+    certificates: List[CertificateEvidence] = Field(default_factory=list)
     tamper_proof_hash: str
     issued_at: str
     audit_log: Optional[RunAuditLog] = None
@@ -207,10 +235,9 @@ class SimulationResult(BaseModel):
     resolved_refusals: List[str]
 
 class ApplyQuizRequest(BaseModel):
+    """The grade comes from the server's record of the attempt, never from the client."""
     passport: PassportDocument
-    skill: str
-    grade: str
-    percentage: Optional[float] = None
+    attempt_id: str
     trajectory: Optional[str] = None
 
 
@@ -262,5 +289,6 @@ class StepEvaluationResult(BaseModel):
     final_grade: Optional[str] = None            # A, B, C, D, E when complete
     final_weighted_score: Optional[float] = None # 0 to 100
     trajectory: Optional[str] = None             # E.g. T2(Pass)->T3(Pass)->T3(Pass)->T3(Pass)
+    attempt_id: Optional[str] = None             # Recorded quiz attempt ID for passport application
 
 

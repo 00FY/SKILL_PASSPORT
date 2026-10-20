@@ -209,10 +209,13 @@ def test_full_adaptive_assessment_workflow_via_api():
     assert final_res["is_complete"] is True
     assert final_res["final_grade"] == "A"
     assert final_res["final_weighted_score"] >= 85.0
-    assert "T2(Pass)->T3(Pass)->T3(Pass)->T3(Pass)" in final_res["trajectory"]
+    assert final_res["attempt_id"] is not None
 
 
 def test_apply_assessment_updates_passport_and_respects_contradicted():
+    from app.module3_rubric import CryptoSigner
+    from app.main import quiz_attempts
+
     # 1. Test updating a VERIFIED skill
     passport = PassportDocument(
         candidate_name="Jane Doe",
@@ -244,16 +247,17 @@ def test_apply_assessment_updates_passport_and_respects_contradicted():
         refusal_panel=[],
         learning_plan=[],
         security_alerts=[],
-        tamper_proof_hash="dummy",
+        tamper_proof_hash="",
         issued_at="2026-01-01T00:00:00Z"
     )
+    passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
+
+    py_attempt = quiz_attempts.record("Python", "A", 95.0)
 
     # Apply Grade A to Python (evidence_score=8, weight=10 -> 80 pts)
     apply_res = client.post("/api/quiz/apply", json={
         "passport": passport.model_dump(),
-        "skill": "Python",
-        "grade": "A",
-        "percentage": 95.0,
+        "attempt_id": py_attempt,
         "trajectory": "T2(Pass)->T3(Pass)->T3(Pass)->T3(Pass)"
     })
     assert apply_res.status_code == 200
@@ -267,20 +271,13 @@ def test_apply_assessment_updates_passport_and_respects_contradicted():
     assert "T2(Pass)->T3(Pass)" in adaptive_trace["rule_applied"]
 
     # 2. Security test: Apply Grade A to CONTRADICTED skill
+    fa_attempt = quiz_attempts.record("FastAPI", "A", 100.0)
     apply_fa = client.post("/api/quiz/apply", json={
         "passport": updated_p,
-        "skill": "FastAPI",
-        "grade": "A",
-        "percentage": 100.0,
+        "attempt_id": fa_attempt,
         "trajectory": "T2(Pass)->T3(Pass)->T3(Pass)->T3(Pass)"
     })
-    assert apply_fa.status_code == 200
-    updated_fa = apply_fa.json()
-    fa_skill = next(s for s in updated_fa["skills"] if s["name"] == "FastAPI")
-    assert fa_skill["test_grade"] == "A"
-    # Core security guarantee: CONTRADICTED points remain 10 and verdict is CONTRADICTED
-    assert fa_skill["verdict"] == "CONTRADICTED"
-    assert fa_skill["final_points"] == 10
+    assert apply_fa.status_code == 409
 
 
 def test_infinite_loop_cleanup_via_ast_counter():

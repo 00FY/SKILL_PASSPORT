@@ -70,3 +70,51 @@ class GitHubClient:
             1 for pr in data
             if pr.get("merged_at") and (not logins or (pr.get("user") or {}).get("login", "").lower() in logins)
         )
+
+    def user_profile(self, username: str, problems: Optional[List[str]] = None) -> Optional[Dict]:
+        """Fetch basic public GitHub profile info: name, bio, public_repos, avatar_url, etc."""
+        data = self._get(f"/users/{username}", problems=problems)
+        if not isinstance(data, dict):
+            return None
+        return {
+            "login": data.get("login") or username,
+            "name": data.get("name"),
+            "bio": data.get("bio"),
+            "avatar_url": data.get("avatar_url"),
+            "public_repos": data.get("public_repos", 0),
+            "blog": data.get("blog"),
+            "location": data.get("location"),
+        }
+
+    def user_repos(self, username: str, limit: int = 5, problems: Optional[List[str]] = None) -> List[Dict]:
+        """
+        Fetch public non-fork repositories for a user, sorted by pushed_at descending.
+        Returns top `limit` original repositories.
+        """
+        data = self._get(
+            f"/users/{username}/repos",
+            params={"sort": "pushed", "direction": "desc", "per_page": 30, "type": "owner"},
+            problems=problems
+        )
+        if not isinstance(data, list):
+            return []
+        
+        original_repos: List[Dict] = []
+        for r in data:
+            if not isinstance(r, dict):
+                continue
+            if r.get("fork"):
+                continue  # skip forks to evaluate original work
+            original_repos.append({
+                "html_url": r.get("html_url"),
+                "name": r.get("name"),
+                "description": r.get("description"),
+                "language": r.get("language"),
+                "topics": r.get("topics") or [],
+                "stargazers_count": r.get("stargazers_count", 0),
+                "forks_count": r.get("forks_count", 0),
+                "pushed_at": r.get("pushed_at"),
+            })
+            if len(original_repos) >= limit:
+                break
+        return original_repos

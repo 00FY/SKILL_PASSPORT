@@ -2,6 +2,7 @@ import React from 'react';
 import { Award, FileCode, X } from 'lucide-react';
 import { RunAuditLog, SkillPassportItem } from '../lib/types';
 import { VerdictBadge } from './VerdictBadge';
+import { pointsFormula } from '../lib/verdicts';
 
 interface EvidenceDrawerProps {
   skill: SkillPassportItem | null;
@@ -43,9 +44,7 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ skill, auditLog,
           </Section>
 
           <Section title="How the points were calculated">
-            <p className="text-zinc-300">
-              Evidence {skill.evidence_score}/10 × grade {skill.test_grade} = {skill.final_points} points
-            </p>
+            <p className="text-zinc-300">{pointsFormula(skill)}</p>
             {skill.reasoning && <p className="text-zinc-400">Evidence level: {skill.reasoning}</p>}
           </Section>
 
@@ -72,25 +71,42 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ skill, auditLog,
             </Section>
           )}
 
-          <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-4">
+          <div className={`rounded-xl border p-4 ${
+            skill.signals.some(s => s.toLowerCase().includes('quiz pending'))
+              ? 'border-amber-500/40 bg-amber-500/10'
+              : 'border-indigo-500/30 bg-indigo-500/10'
+          }`}>
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="font-semibold text-indigo-200">Skill Test Challenge</p>
-                <p className="text-xs text-zinc-400">
-                  {skill.test_grade ? (
-                    <>Test Grade: <strong className="text-emerald-300">Grade {skill.test_grade}</strong> · Evidence: <strong className="text-zinc-200">{skill.evidence_score}/10</strong></>
+                <p className="font-semibold text-zinc-100 flex items-center gap-1.5">
+                  <Award className="h-4 w-4 text-indigo-400" /> Skill Test Challenge
+                  {skill.signals.some(s => s.toLowerCase().includes('quiz pending')) && (
+                    <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                      MANDATORY PENDING
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  {skill.test_grade && !skill.signals.some(s => s.toLowerCase().includes('quiz pending')) ? (
+                    <>Verified Grade: <strong className="text-emerald-300">Grade {skill.test_grade}</strong> · Evidence: <strong className="text-zinc-200">{skill.evidence_score}/10</strong></>
                   ) : (
-                    <>Take test to verify grade · Evidence: <strong className="text-zinc-200">{skill.evidence_score}/10</strong></>
+                    <>Complete mandatory challenge to verify this skill and upgrade from <strong className="text-amber-300">Grade E</strong>.</>
                   )}
                 </p>
               </div>
               <button
                 id="take-test-btn"
                 onClick={() => onOpenQuiz(skill.name)}
-                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 transition-colors"
+                className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-colors ${
+                  skill.signals.some(s => s.toLowerCase().includes('quiz pending'))
+                    ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-600/20'
+                    : 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/20'
+                }`}
               >
                 <Award className="h-4 w-4" />
-                {skill.test_grade ? `Retake ${skill.name} Test` : `Take ${skill.name} Test`}
+                {skill.signals.some(s => s.toLowerCase().includes('quiz pending'))
+                  ? `Take ${skill.name} Quiz Now`
+                  : `Retake ${skill.name} Test`}
               </button>
             </div>
           </div>

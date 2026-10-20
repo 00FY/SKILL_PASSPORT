@@ -1,3 +1,5 @@
+import os
+import json
 import ast
 import uuid
 import concurrent.futures
@@ -16,6 +18,37 @@ BANNED_AST_NAMES = {
 BANNED_ATTRIBUTES = {"__subclasses__", "__globals__", "__code__", "__builtins__"}
 STAGE_SEQUENCE = [StageType.COMPREHENSION, StageType.DEBUGGING, StageType.CODING, StageType.REASONING]
 DIFFICULTY_WEIGHTS = {1: 1.0, 2: 1.5, 3: 2.2}
+MAX_LOOP_ITERATIONS = 200_000
+
+
+class LoopLimiter(ast.NodeTransformer):
+    """
+    Injects an iteration counter check into every loop body (while, for)
+    to terminate runaway/infinite loops in-thread without hanging worker threads.
+    """
+    def visit_For(self, node):
+        self.generic_visit(node)
+        check_call = ast.Expr(
+            value=ast.Call(
+                func=ast.Name(id="__check_loop_iter__", ctx=ast.Load()),
+                args=[],
+                keywords=[]
+            )
+        )
+        node.body.insert(0, check_call)
+        return node
+
+    def visit_While(self, node):
+        self.generic_visit(node)
+        check_call = ast.Expr(
+            value=ast.Call(
+                func=ast.Name(id="__check_loop_iter__", ctx=ast.Load()),
+                args=[],
+                keywords=[]
+            )
+        )
+        node.body.insert(0, check_call)
+        return node
 
 
 class AdaptiveAssessmentEngine:
@@ -24,9 +57,46 @@ class AdaptiveAssessmentEngine:
     AST-sandboxed test execution, and deterministic rubric evaluations.
     """
 
-    def __init__(self):
+    def __init__(self, storage_dir: Optional[str] = None):
+        self.storage_dir = storage_dir
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.injection_guard = PromptInjectionDefense()
+
+    def _get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        if session_id in self.sessions:
+            return self.sessions[session_id]
+        if self.storage_dir:
+            path = os.path.join(self.storage_dir, f"{session_id}.json")
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    data["seen_task_ids"] = set(data.get("seen_task_ids", []))
+                    if isinstance(data.get("current_difficulty"), int):
+                        data["current_difficulty"] = DifficultyTier(data["current_difficulty"])
+                    self.sessions[session_id] = data
+                    return data
+                except Exception:
+                    return None
+        return None
+
+    def _save_session(self, session_id: str) -> None:
+        if not self.storage_dir:
+            return
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        try:
+            os.makedirs(self.storage_dir, exist_ok=True)
+            path = os.path.join(self.storage_dir, f"{session_id}.json")
+            dumpable = dict(session)
+            dumpable["seen_task_ids"] = list(session["seen_task_ids"])
+            curr_diff = session.get("current_difficulty")
+            dumpable["current_difficulty"] = curr_diff.value if isinstance(curr_diff, DifficultyTier) else curr_diff
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(dumpable, f)
+        except Exception:
+            pass
 
     def start_session(
         self,
@@ -56,10 +126,11 @@ class AdaptiveAssessmentEngine:
             "history": [],
             "completed": False,
         }
+        self._save_session(session_id)
         return {"session_id": session_id, "task": self._to_public(first_task)}
 
     def submit_step(self, req: TaskSubmissionRequest) -> StepEvaluationResult:
-        session = self.sessions.get(req.session_id)
+        session = self._get_session(req.session_id)
         if not session or session["completed"]:
             raise ValueError("Invalid or already completed assessment session.")
 
@@ -130,6 +201,7 @@ class AdaptiveAssessmentEngine:
             session["final_score"] = final_score
             session["final_grade"] = final_grade
             session["trajectory"] = trajectory
+            self._save_session(req.session_id)
             return StepEvaluationResult(
                 task_id=task["task_id"],
                 passed=passed,
@@ -150,6 +222,7 @@ class AdaptiveAssessmentEngine:
             session["skill"], next_stage, next_diff, session["seen_task_ids"]
         )
         session["seen_task_ids"].add(next_task["task_id"])
+        self._save_session(req.session_id)
 
         return StepEvaluationResult(
             task_id=task["task_id"],
@@ -164,6 +237,7 @@ class AdaptiveAssessmentEngine:
             next_task=self._to_public(next_task),
             trajectory=trajectory,
         )
+
 
     def _evaluate_code_safely(self, code: str, fn_name: str, tests: List[Dict]):
         # Static AST Security Gate before execution
@@ -180,13 +254,24 @@ class AdaptiveAssessmentEngine:
             if isinstance(node, ast.Attribute) and node.attr in BANNED_ATTRIBUTES:
                 return 0.0, [], f"Security policy: Restricted attribute '{node.attr}' detected."
 
+        # Transform AST to inject loop iteration checks
+        tree = LoopLimiter().visit(tree)
+        ast.fix_missing_locations(tree)
+
+        iter_counter = [0]
+        def check_loop_iter():
+            iter_counter[0] += 1
+            if iter_counter[0] > MAX_LOOP_ITERATIONS:
+                raise RuntimeError("Execution stopped: loop iteration limit exceeded")
+
         safe_builtins = {
             "len": len, "range": range, "min": min, "max": max, "sum": sum,
             "abs": abs, "enumerate": enumerate, "zip": zip, "list": list,
             "dict": dict, "set": set, "tuple": tuple, "sorted": sorted,
             "int": int, "str": str, "float": float, "bool": bool,
             "all": all, "any": any, "round": round, "reversed": reversed,
-            "map": map, "filter": filter
+            "map": map, "filter": filter,
+            "__check_loop_iter__": check_loop_iter
         }
         namespace: Dict[str, Any] = {"__builtins__": safe_builtins}
         try:
@@ -201,6 +286,8 @@ class AdaptiveAssessmentEngine:
         results = []
         passed_count = 0
         for idx, t in enumerate(tests, 1):
+            iter_counter[0] = 0
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             try:
                 def run_single():
                     copied_args = [
@@ -209,9 +296,8 @@ class AdaptiveAssessmentEngine:
                     ]
                     return candidate_fn(*copied_args)
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(run_single)
-                    actual = future.result(timeout=2.0)
+                future = executor.submit(run_single)
+                actual = future.result(timeout=2.0)
 
                 ok = (actual == t.get("expected"))
                 if ok:
@@ -221,6 +307,8 @@ class AdaptiveAssessmentEngine:
                 results.append({"test_case": idx, "passed": False, "error": "Execution timed out (limit: 2.0s)"})
             except Exception as e:
                 results.append({"test_case": idx, "passed": False, "error": f"{type(e).__name__}: {e}"})
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
         score = round(passed_count / len(tests), 2) if tests else 0.0
         return score, results, f"Passed {passed_count}/{len(tests)} automated test cases."
