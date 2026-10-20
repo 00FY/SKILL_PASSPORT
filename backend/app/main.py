@@ -213,6 +213,7 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
 
     # 0. Profile discovery if username provided and no explicit repos given
     profile_info = None
+    profile_problem = None
     if req.github_username and req.github_username.strip():
         try:
             report(f"Scanning GitHub profile @{req.github_username.strip()}")
@@ -220,8 +221,12 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
             profile_info = scanner.scan_profile(req.github_username.strip())
             if not repos and profile_info.repo_urls:
                 repos = profile_info.repo_urls[:MAX_REPOS]
-        except Exception:
-            pass
+            if not profile_info.repo_urls and profile_info.warnings:
+                profile_problem = profile_info.warnings[0]
+        except ValueError as exc:
+            profile_problem = str(exc)
+        except Exception as exc:
+            profile_problem = f"GitHub profile lookup failed: {exc}"
 
     # 1. Module 1: Extract claims or build from code profile & certs (Optional Resume)
     has_resume = bool(req.resume_text and req.resume_text.strip())
@@ -261,6 +266,15 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
         resume_links += pdf_parser.parse_text_or_markdown(req.resume_text)[1]
         repos = _repo_links(resume_links)[:MAX_REPOS]
         auto_detected = bool(repos)
+
+    if not repos and profile_problem:
+        # The repositories were meant to come from the GitHub profile; don't issue a passport without them
+        raise JobFailure(
+            f"Couldn't list @{req.github_username.strip()}'s repositories: {profile_problem} "
+            "Paste the repository URLs into 'Repositories to analyze' instead (cloning doesn't use the GitHub API), "
+            "or set GITHUB_TOKEN on the server and try again.",
+            503,
+        )
 
     # 2. Module 2: Code Evidence Harvester (real git blame, AST parsing, test detection)
     try:

@@ -98,7 +98,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
         setRepoUrls(data.repo_urls.join('\n'));
       }
       if (data.warnings && data.warnings.length > 0) {
-        setNotices(data.warnings);
+        setNotices(data.repo_urls.length > 0 ? data.warnings : [
+          ...data.warnings,
+          'Paste your repository URLs into "Repositories to analyze" instead: the analysis clones them directly and does not need the GitHub API.',
+        ]);
       }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to discover GitHub profile.');

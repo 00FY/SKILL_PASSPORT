@@ -1,9 +1,13 @@
 import logging
 import os
-from typing import Dict, Iterable, List, Optional
+import threading
+import time
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 import httpx
 
 RATE_LIMITED = "rate_limited"
+CACHE_TTL_S = 15 * 60
+MAX_CACHE_ENTRIES = 2000
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +20,12 @@ class GitHubClient:
     Set GITHUB_TOKEN to raise the rate limit; set SKILL_PASSPORT_GITHUB_API=0 to disable.
     """
 
+    # Shared by every client in the process: without a token GitHub allows 60 requests an hour per
+    # address, so answers are reused for a while and no calls are made until a hit limit resets.
+    _cache: Dict[Tuple[str, str, str], Tuple[float, Any]] = {}
+    _limited_until: Dict[str, float] = {}
+    _lock = threading.Lock()
+
     def __init__(self, token: Optional[str] = None, timeout: float = 8.0, enabled: Optional[bool] = None):
         self.token = token if token is not None else os.getenv("GITHUB_TOKEN")
         self.timeout = timeout
@@ -25,6 +35,17 @@ class GitHubClient:
         """GET a REST path. Failures return None and, if `problems` is given, append why."""
         if not self.enabled:
             return None
+        auth = "token" if self.token else "anonymous"
+        key = (auth, path, repr(sorted((params or {}).items())))
+        now = time.time()
+        with GitHubClient._lock:
+            cached = GitHubClient._cache.get(key)
+            if cached and now - cached[0] < CACHE_TTL_S:
+                return cached[1]
+            if GitHubClient._limited_until.get(auth, 0) > now:
+                if problems is not None:
+                    problems.append(RATE_LIMITED)
+                return None
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -32,13 +53,25 @@ class GitHubClient:
             res = httpx.get(f"https://api.github.com{path}", headers=headers, params=params, timeout=self.timeout)
             if res.status_code != 200:
                 logger.info("GitHub API %s returned %s", path, res.status_code)
+                limited = res.status_code in (403, 429) and (
+                    res.headers.get("x-ratelimit-remaining") == "0" or "rate limit" in res.text.lower()
+                )
+                if limited:
+                    try:
+                        reset_at = float(res.headers.get("x-ratelimit-reset", "0"))
+                    except ValueError:
+                        reset_at = 0.0
+                    with GitHubClient._lock:
+                        GitHubClient._limited_until[auth] = max(reset_at, now + 60)
                 if problems is not None:
-                    limited = res.status_code in (403, 429) and (
-                        res.headers.get("x-ratelimit-remaining") == "0" or "rate limit" in res.text.lower()
-                    )
                     problems.append(RATE_LIMITED if limited else f"HTTP {res.status_code}")
                 return None
-            return res.json()
+            data = res.json()
+            with GitHubClient._lock:
+                if len(GitHubClient._cache) >= MAX_CACHE_ENTRIES:
+                    GitHubClient._cache.clear()
+                GitHubClient._cache[key] = (now, data)
+            return data
         except (httpx.HTTPError, ValueError) as exc:
             logger.info("GitHub API %s failed: %s", path, exc)
             if problems is not None:
