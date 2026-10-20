@@ -2,7 +2,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from ..schemas import QuizQuestion, QuizResult, QuizReviewItem, PublicQuizQuestion
 from .scoring_engine import DeterministicScoringEngine, GRADE_WEIGHTS
 from ..skills import normalize_skill
@@ -665,6 +665,876 @@ class QuestionBankEngine:
             ]
         )
 
+# ==============================================================================
+# Multi-Stage Adaptive Technical Assessment Question Bank
+# ==============================================================================
+
+ADAPTIVE_QUESTION_BANK: Dict[str, List[Dict[str, Any]]] = {
+    "Python": [
+        # --- TIER 1: FOUNDATIONAL ---
+        {
+            "task_id": "py-comp-1",
+            "skill": "Python",
+            "stage_type": "comprehension",
+            "difficulty": 1,
+            "prompt": "What does the following function return when called twice as `append_item(1)` then `append_item(2)`?",
+            "starter_code": "def append_item(val, items=[]):\n    items.append(val)\n    return items",
+            "options": ["[1] then [2]", "[1] then [1, 2]", "TypeError", "None then [2]"],
+            "correct_option": 1,
+            "explanation": "Default mutable arguments are evaluated once at function definition time in Python."
+        },
+        {
+            "task_id": "py-dbg-1",
+            "skill": "Python",
+            "stage_type": "debugging",
+            "difficulty": 1,
+            "prompt": "Fix `remove_negatives` so it keeps all numbers that are greater than or equal to 0 (including zero).",
+            "starter_code": (
+                "def remove_negatives(nums: list[int]) -> list[int]:\n"
+                "    # BUG: strictly greater than 0 drops zero\n"
+                "    return [x for x in nums if x > 0]\n"
+            ),
+            "entry_function": "remove_negatives",
+            "sample_tests": ["assert remove_negatives([-1, 0, 2]) == [0, 2]"],
+            "hidden_tests": [
+                {"args": [[-1, 0, 2, -3, 5]], "expected": [0, 2, 5]},
+                {"args": [[-5, -2]], "expected": []},
+                {"args": [[0, 0, 0]], "expected": [0, 0, 0]}
+            ]
+        },
+        {
+            "task_id": "py-code-1",
+            "skill": "Python",
+            "stage_type": "coding",
+            "difficulty": 1,
+            "prompt": "Implement `count_vowels(s: str) -> int` that returns the number of vowels (a, e, i, o, u) in string `s` case-insensitively.",
+            "starter_code": (
+                "def count_vowels(s: str) -> int:\n"
+                "    # Write your implementation here\n"
+                "    pass\n"
+            ),
+            "entry_function": "count_vowels",
+            "sample_tests": ["assert count_vowels('Hello World') == 3"],
+            "hidden_tests": [
+                {"args": ["Hello World"], "expected": 3},
+                {"args": ["AEIOUxyz"], "expected": 5},
+                {"args": ["bcd"], "expected": 0},
+                {"args": [""], "expected": 0}
+            ]
+        },
+        {
+            "task_id": "py-reas-1",
+            "skill": "Python",
+            "stage_type": "reasoning",
+            "difficulty": 1,
+            "prompt": "Explain how Python garbage collection operates using reference counts, and why cyclic reference detection is needed.",
+            "required_concepts": [
+                {"name": "Reference counting", "keywords": ["reference count", "refcount", "increments", "decrements", "zero"]},
+                {"name": "Cyclic collection", "keywords": ["cyclic", "cycle", "cycles", "generational", "generations", "gc"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        },
+
+        # --- TIER 2: INTERMEDIATE ---
+        {
+            "task_id": "py-comp-2",
+            "skill": "Python",
+            "stage_type": "comprehension",
+            "difficulty": 2,
+            "prompt": "What does the following generator unpacking expression produce?",
+            "starter_code": "val = list(x * 2 for x in [1, 2, 3] if x > 1)\nprint(val)",
+            "options": ["[2, 4, 6]", "[4, 6]", "[2, 4]", "TypeError: generator is not subscriptable"],
+            "correct_option": 1,
+            "explanation": "The generator filters items where x > 1 (leaving 2, 3) and doubles them to yield [4, 6]."
+        },
+        {
+            "task_id": "py-dbg-2",
+            "skill": "Python",
+            "stage_type": "debugging",
+            "difficulty": 2,
+            "prompt": "Fix the bug in `max_window_sum` so it correctly handles negative numbers and empty windows.",
+            "starter_code": (
+                "def max_window_sum(nums: list[int], k: int) -> int:\n"
+                "    if not nums or k <= 0 or k > len(nums):\n"
+                "        return 0\n"
+                "    best = 0  # BUG: fails if all numbers are negative\n"
+                "    for i in range(len(nums) - k + 1):\n"
+                "        best = max(best, sum(nums[i:i+k]))\n"
+                "    return best\n"
+            ),
+            "entry_function": "max_window_sum",
+            "sample_tests": ["assert max_window_sum([1, 4, 2, 10], 2) == 12"],
+            "hidden_tests": [
+                {"args": [[1, 4, 2, 10], 2], "expected": 12},
+                {"args": [[-5, -2, -8, -1], 2], "expected": -7},
+                {"args": [[5], 3], "expected": 0}
+            ]
+        },
+        {
+            "task_id": "py-code-2",
+            "skill": "Python",
+            "stage_type": "coding",
+            "difficulty": 2,
+            "prompt": "Implement `chunk_list(items: list, size: int) -> list` that splits `items` into consecutive chunks of maximum length `size`. Return `[]` if `size <= 0`.",
+            "starter_code": (
+                "def chunk_list(items: list, size: int) -> list:\n"
+                "    # Write your implementation here\n"
+                "    pass\n"
+            ),
+            "entry_function": "chunk_list",
+            "sample_tests": ["assert chunk_list([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]"],
+            "hidden_tests": [
+                {"args": [[1, 2, 3, 4, 5], 2], "expected": [[1, 2], [3, 4], [5]]},
+                {"args": [[1, 2], 3], "expected": [[1, 2]]},
+                {"args": [[], 2], "expected": []},
+                {"args": [[1, 2, 3], 0], "expected": []}
+            ]
+        },
+        {
+            "task_id": "py-reas-2",
+            "skill": "Python",
+            "stage_type": "reasoning",
+            "difficulty": 2,
+            "prompt": "Explain the purpose of Python's Global Interpreter Lock (GIL) and why standard threading fails to speed up CPU-bound tasks.",
+            "required_concepts": [
+                {"name": "GIL thread safety", "keywords": ["gil", "global interpreter lock", "cpython", "single thread", "bytecode", "memory"]},
+                {"name": "CPU-bound solution", "keywords": ["multiprocessing", "process", "processes", "asyncio", "cpu-bound", "subinterpreters", "cores"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        },
+
+        # --- TIER 3: ADVANCED ---
+        {
+            "task_id": "py-comp-3",
+            "skill": "Python",
+            "stage_type": "comprehension",
+            "difficulty": 3,
+            "prompt": "What memory optimization does defining `__slots__ = ('x', 'y')` provide in a CPython class?",
+            "starter_code": "class Point:\n    __slots__ = ('x', 'y')\n    def __init__(self, x, y):\n        self.x, self.y = x, y",
+            "options": [
+                "Compresses object bytecode into CPU L1 cache",
+                "Replaces the per-instance `__dict__` with a static descriptor array, significantly reducing memory footprint",
+                "Enables multithreaded atomic memory allocation",
+                "Disables garbage collection for all Point instances"
+            ],
+            "correct_option": 1,
+            "explanation": "__slots__ eliminates the per-instance __dict__ and __weakref__ overhead."
+        },
+        {
+            "task_id": "py-dbg-3",
+            "skill": "Python",
+            "stage_type": "debugging",
+            "difficulty": 3,
+            "prompt": "Fix `merge_intervals(intervals: list[list[int]]) -> list[list[int]]` so overlapping intervals are merged properly even when unsorted.",
+            "starter_code": (
+                "def merge_intervals(intervals: list[list[int]]) -> list[list[int]]:\n"
+                "    if not intervals:\n"
+                "        return []\n"
+                "    # BUG: does not sort intervals before merging\n"
+                "    merged = [intervals[0]]\n"
+                "    for curr in intervals[1:]:\n"
+                "        prev = merged[-1]\n"
+                "        if curr[0] <= prev[1]:\n"
+                "            prev[1] = max(prev[1], curr[1])\n"
+                "        else:\n"
+                "            merged.append(curr)\n"
+                "    return merged\n"
+            ),
+            "entry_function": "merge_intervals",
+            "sample_tests": ["assert merge_intervals([[1, 4], [0, 4]]) == [[0, 4]]"],
+            "hidden_tests": [
+                {"args": [[[1, 4], [0, 4]]], "expected": [[0, 4]]},
+                {"args": [[[1, 3], [2, 6], [8, 10], [15, 18]]], "expected": [[1, 6], [8, 10], [15, 18]]},
+                {"args": [[]], "expected": []}
+            ]
+        },
+        {
+            "task_id": "py-code-3",
+            "skill": "Python",
+            "stage_type": "coding",
+            "difficulty": 3,
+            "prompt": "Implement `dedupe_preserve_order(items: list[dict], key: str) -> list[dict]` that removes duplicate dicts by `key` while keeping the FIRST occurrence.",
+            "starter_code": (
+                "def dedupe_preserve_order(items: list[dict], key: str) -> list[dict]:\n"
+                "    # Write your implementation here\n"
+                "    pass\n"
+            ),
+            "entry_function": "dedupe_preserve_order",
+            "sample_tests": [
+                "assert dedupe_preserve_order([{'id': 1, 'v': 'a'}, {'id': 1, 'v': 'b'}], 'id') == [{'id': 1, 'v': 'a'}]"
+            ],
+            "hidden_tests": [
+                {
+                    "args": [[{"id": 1, "v": "a"}, {"id": 2, "v": "b"}, {"id": 1, "v": "c"}], "id"],
+                    "expected": [{"id": 1, "v": "a"}, {"id": 2, "v": "b"}]
+                },
+                {"args": [[{"k": "x"}, {"k": "y"}, {"k": "x"}], "k"], "expected": [{"k": "x"}, {"k": "y"}]},
+                {"args": [[], "id"], "expected": []}
+            ]
+        },
+        {
+            "task_id": "py-reas-3",
+            "skill": "Python",
+            "stage_type": "reasoning",
+            "difficulty": 3,
+            "prompt": "Explain why `git blame` or CPU-bound AST parsing inside a FastAPI `async def` endpoint blocks the entire event loop, and how to fix it.",
+            "required_concepts": [
+                {"name": "Event loop blocking", "keywords": ["event loop", "single thread", "blocks", "blocking", "synchronous", "cpu-bound"]},
+                {"name": "Concurrency solution", "keywords": ["threadpool", "run_in_executor", "processpool", "background", "worker", "regular def"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        }
+    ],
+
+    "FastAPI": [
+        # --- TIER 1: FOUNDATIONAL ---
+        {
+            "task_id": "fa-comp-1",
+            "skill": "FastAPI",
+            "stage_type": "comprehension",
+            "difficulty": 1,
+            "prompt": "What HTTP status code does FastAPI automatically return when request body validation fails?",
+            "starter_code": "@app.post('/items')\ndef create_item(item: ItemModel):\n    return item",
+            "options": ["400 Bad Request", "422 Unprocessable Entity", "500 Internal Server Error", "404 Not Found"],
+            "correct_option": 1,
+            "explanation": "FastAPI uses Pydantic validation and returns 422 Unprocessable Entity by default."
+        },
+        {
+            "task_id": "fa-dbg-1",
+            "skill": "FastAPI",
+            "stage_type": "debugging",
+            "difficulty": 1,
+            "prompt": "Fix `normalize_route_path` so it ensures the path always starts with a single `/` and has no trailing slash (unless it is root `/`).",
+            "starter_code": (
+                "def normalize_route_path(path: str) -> str:\n"
+                "    # BUG: does not strip leading/trailing slashes cleanly\n"
+                "    return '/' + path + '/'\n"
+            ),
+            "entry_function": "normalize_route_path",
+            "sample_tests": ["assert normalize_route_path('api/users/') == '/api/users'"],
+            "hidden_tests": [
+                {"args": ["api/users/"], "expected": "/api/users"},
+                {"args": ["/items"], "expected": "/items"},
+                {"args": ["/"], "expected": "/"},
+                {"args": ["///docs///"], "expected": "/docs"}
+            ]
+        },
+        {
+            "task_id": "fa-code-1",
+            "skill": "FastAPI",
+            "stage_type": "coding",
+            "difficulty": 1,
+            "prompt": "Implement `parse_query_params(query_str: str) -> dict` that converts a URL query string like `a=1&b=2` into a dictionary of string values. Handle empty strings by returning `{}`.",
+            "starter_code": (
+                "def parse_query_params(query_str: str) -> dict:\n"
+                "    # Write your implementation here\n"
+                "    pass\n"
+            ),
+            "entry_function": "parse_query_params",
+            "sample_tests": ["assert parse_query_params('q=fastapi&limit=10') == {'q': 'fastapi', 'limit': '10'}"],
+            "hidden_tests": [
+                {"args": ["q=fastapi&limit=10"], "expected": {"q": "fastapi", "limit": "10"}},
+                {"args": ["search=ai"], "expected": {"search": "ai"}},
+                {"args": [""], "expected": {}}
+            ]
+        },
+        {
+            "task_id": "fa-reas-1",
+            "skill": "FastAPI",
+            "stage_type": "reasoning",
+            "difficulty": 1,
+            "prompt": "Explain how FastAPI's `Depends()` dependency injection mechanism works for database sessions and authentication.",
+            "required_concepts": [
+                {"name": "Dependency Injection", "keywords": ["depends", "dependency", "injection", "reuse", "sub-dependency"]},
+                {"name": "Lifecycle Management", "keywords": ["session", "yield", "cleanup", "close", "scope", "cached"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        },
+
+        # --- TIER 2: INTERMEDIATE ---
+        {
+            "task_id": "fa-comp-2",
+            "skill": "FastAPI",
+            "stage_type": "comprehension",
+            "difficulty": 2,
+            "prompt": "How does FastAPI execute synchronous path operations defined with a standard `def` instead of `async def`?",
+            "starter_code": "@app.get('/sync-task')\ndef compute_heavy():\n    return {'status': 'done'}",
+            "options": [
+                "Blocks the entire event loop until finished",
+                "Executes them in an external worker threadpool to avoid blocking async requests",
+                "Converts the bytecode to asyncio coroutines automatically",
+                "Raises a RuntimeError at server startup"
+            ],
+            "correct_option": 1,
+            "explanation": "FastAPI offloads synchronous def handlers to a threadpool via AnyIO to prevent blocking the event loop."
+        },
+        {
+            "task_id": "fa-dbg-2",
+            "skill": "FastAPI",
+            "stage_type": "debugging",
+            "difficulty": 2,
+            "prompt": "Fix `extract_bearer_token` so it correctly validates `Authorization: Bearer <token>` headers, returning the raw token string or `None` if invalid.",
+            "starter_code": (
+                "def extract_bearer_token(auth_header: str) -> str:\n"
+                "    # BUG: fails if header doesn't start with Bearer or has extra spaces\n"
+                "    parts = auth_header.split(' ')\n"
+                "    return parts[1]\n"
+            ),
+            "entry_function": "extract_bearer_token",
+            "sample_tests": ["assert extract_bearer_token('Bearer abc123xyz') == 'abc123xyz'"],
+            "hidden_tests": [
+                {"args": ["Bearer mysecrettoken"], "expected": "mysecrettoken"},
+                {"args": ["Basic user:pass"], "expected": None},
+                {"args": ["Bearer"], "expected": None},
+                {"args": [""], "expected": None}
+            ]
+        },
+        {
+            "task_id": "fa-code-2",
+            "skill": "FastAPI",
+            "stage_type": "coding",
+            "difficulty": 2,
+            "prompt": "Implement `build_openapi_tag_dict(routes: list[dict]) -> dict` that groups route paths by their primary tag, returning `{tag: [path1, path2]}`.",
+            "starter_code": (
+                "def build_openapi_tag_dict(routes: list[dict]) -> dict:\n"
+                "    # routes: [{'path': '/users', 'tag': 'auth'}, ...]\n"
+                "    pass\n"
+            ),
+            "entry_function": "build_openapi_tag_dict",
+            "sample_tests": ["assert build_openapi_tag_dict([{'path': '/u', 'tag': 'user'}]) == {'user': ['/u']}"],
+            "hidden_tests": [
+                {
+                    "args": [[{"path": "/login", "tag": "auth"}, {"path": "/me", "tag": "auth"}, {"path": "/items", "tag": "store"}]],
+                    "expected": {"auth": ["/login", "/me"], "store": ["/items"]}
+                },
+                {"args": [[]], "expected": {}}
+            ]
+        },
+        {
+            "task_id": "fa-reas-2",
+            "skill": "FastAPI",
+            "stage_type": "reasoning",
+            "difficulty": 2,
+            "prompt": "Explain the architectural difference between `async def` and `def` route handlers in FastAPI, and when using `async def` with blocking I/O causes severe latency spikes.",
+            "required_concepts": [
+                {"name": "Event Loop Blocking", "keywords": ["event loop", "single thread", "blocks", "blocking", "coroutine", "threadpool"]},
+                {"name": "Async I/O vs CPU I/O", "keywords": ["await", "non-blocking", "run_in_executor", "def", "database driver", "asyncpg"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        },
+
+        # --- TIER 3: ADVANCED ---
+        {
+            "task_id": "fa-comp-3",
+            "skill": "FastAPI",
+            "stage_type": "comprehension",
+            "difficulty": 3,
+            "prompt": "In FastAPI dependency resolution, what does `use_cache=True` (the default) guarantee?",
+            "starter_code": "async def get_db(): ...\n@app.get('/')\ndef handler(db1=Depends(get_db), db2=Depends(get_db)): ...",
+            "options": [
+                "Caches query results across multiple HTTP requests in Redis",
+                "Executes the dependency once per request and shares the returned instance across all sub-dependencies within that request",
+                "Stores serialized response JSON in the client browser cache",
+                "Caches function bytecode in shared memory"
+            ],
+            "correct_option": 1,
+            "explanation": "Per-request caching ensures identical dependencies within the same request tree are only evaluated once."
+        },
+        {
+            "task_id": "fa-dbg-3",
+            "skill": "FastAPI",
+            "stage_type": "debugging",
+            "difficulty": 3,
+            "prompt": "Fix `resolve_dependency_dag` so it detects cyclic dependency chains and returns `['CYCLE']` if a dependency directly or indirectly depends on itself.",
+            "starter_code": (
+                "def resolve_dependency_dag(graph: dict, start: str) -> list:\n"
+                "    # graph: {'A': ['B'], 'B': ['C'], 'C': ['A']}\n"
+                "    visited = []\n"
+                "    curr = start\n"
+                "    while curr in graph and graph[curr]:\n"
+                "        visited.append(curr)\n"
+                "        curr = graph[curr][0]\n"
+                "    return visited\n"
+            ),
+            "entry_function": "resolve_dependency_dag",
+            "sample_tests": ["assert resolve_dependency_dag({'A': ['B'], 'B': ['A']}, 'A') == ['CYCLE']"],
+            "hidden_tests": [
+                {"args": [{"A": ["B"], "B": ["C"], "C": ["A"]}, "A"], "expected": ["CYCLE"]},
+                {"args": [{"A": ["B"], "B": ["C"], "C": []}, "A"], "expected": ["A", "B", "C"]},
+                {"args": [{"A": []}, "A"], "expected": ["A"]}
+            ]
+        },
+        {
+            "task_id": "fa-code-3",
+            "skill": "FastAPI",
+            "stage_type": "coding",
+            "difficulty": 3,
+            "prompt": "Implement `rate_limiter_check(call_history: list[int], current_time: int, window_sec: int, max_calls: int) -> bool` that returns `True` if a new request is allowed within the sliding window, or `False` if rate-limited.",
+            "starter_code": (
+                "def rate_limiter_check(call_history: list[int], current_time: int, window_sec: int, max_calls: int) -> bool:\n"
+                "    # Write your sliding window rate limit implementation here\n"
+                "    pass\n"
+            ),
+            "entry_function": "rate_limiter_check",
+            "sample_tests": ["assert rate_limiter_check([10, 15, 20], 25, 20, 3) == False"],
+            "hidden_tests": [
+                {"args": [[10, 15, 20], 25, 20, 3], "expected": False},
+                {"args": [[10, 15, 20], 35, 20, 3], "expected": True},
+                {"args": [[], 10, 60, 5], "expected": True}
+            ]
+        },
+        {
+            "task_id": "fa-reas-3",
+            "skill": "FastAPI",
+            "stage_type": "reasoning",
+            "difficulty": 3,
+            "prompt": "Describe how to design an enterprise ASGI middleware architecture in FastAPI for distributed request tracing (Correlation ID), authentication interception, and structured JSON logging without increasing request latency.",
+            "required_concepts": [
+                {"name": "Middleware Request Pipeline", "keywords": ["middleware", "call_next", "request", "response", "asgi", "basehttpmiddleware"]},
+                {"name": "Correlation and Context", "keywords": ["correlation id", "trace id", "contextvars", "headers", "structured log"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        }
+    ],
+
+    "Docker": [
+        # --- TIER 1: FOUNDATIONAL ---
+        {
+            "task_id": "dk-comp-1",
+            "skill": "Docker",
+            "stage_type": "comprehension",
+            "difficulty": 1,
+            "prompt": "What does the `.dockerignore` file do during the image build process?",
+            "starter_code": "# .dockerignore\nnode_modules\n.git\n*.log",
+            "options": [
+                "Stops containers from executing background log processes",
+                "Prevents specified files/directories from being sent to the Docker daemon build context",
+                "Ignores CVE security warnings during compilation",
+                "Deletes files from the host disk when image build starts"
+            ],
+            "correct_option": 1,
+            "explanation": ".dockerignore reduces build context transfer size and prevents secrets from leaking into images."
+        },
+        {
+            "task_id": "dk-dbg-1",
+            "skill": "Docker",
+            "stage_type": "debugging",
+            "difficulty": 1,
+            "prompt": "Fix `parse_port_mapping` so it extracts host and container ports from string `host:container` (e.g. `8080:80`) into `(int, int)`. Return `None` if invalid.",
+            "starter_code": (
+                "def parse_port_mapping(mapping: str) -> tuple:\n"
+                "    # BUG: does not cast to int or handle bad inputs\n"
+                "    parts = mapping.split(':')\n"
+                "    return (parts[0], parts[1])\n"
+            ),
+            "entry_function": "parse_port_mapping",
+            "sample_tests": ["assert parse_port_mapping('8080:80') == (8080, 80)"],
+            "hidden_tests": [
+                {"args": ["8080:80"], "expected": (8080, 80)},
+                {"args": ["3000:3000"], "expected": (3000, 3000)},
+                {"args": ["invalid"], "expected": None}
+            ]
+        },
+        {
+            "task_id": "dk-code-1",
+            "skill": "Docker",
+            "stage_type": "coding",
+            "difficulty": 1,
+            "prompt": "Implement `is_valid_docker_tag(tag: str) -> bool` that verifies a tag consists only of alphanumeric characters, dots, dashes, or underscores, and is between 1 and 128 characters long.",
+            "starter_code": (
+                "def is_valid_docker_tag(tag: str) -> bool:\n"
+                "    # Write your validation logic here\n"
+                "    pass\n"
+            ),
+            "entry_function": "is_valid_docker_tag",
+            "sample_tests": ["assert is_valid_docker_tag('v1.2.3-alpha') == True"],
+            "hidden_tests": [
+                {"args": ["v1.2.3-alpha"], "expected": True},
+                {"args": ["latest"], "expected": True},
+                {"args": ["tag with spaces"], "expected": False},
+                {"args": [""], "expected": False}
+            ]
+        },
+        {
+            "task_id": "dk-reas-1",
+            "skill": "Docker",
+            "stage_type": "reasoning",
+            "difficulty": 1,
+            "prompt": "Explain why multi-stage Docker builds are best practice for production container images.",
+            "required_concepts": [
+                {"name": "Image Size Optimization", "keywords": ["size", "smaller", "minimal", "layers", "footprint", "mb"]},
+                {"name": "Build vs Runtime Isolation", "keywords": ["compiler", "sdk", "runtime", "strip", "dependencies", "attack surface", "security"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        },
+
+        # --- TIER 2: INTERMEDIATE ---
+        {
+            "task_id": "dk-comp-2",
+            "skill": "Docker",
+            "stage_type": "comprehension",
+            "difficulty": 2,
+            "prompt": "What is the key difference between `ENTRYPOINT` and `CMD` in a Dockerfile?",
+            "starter_code": "ENTRYPOINT [\"python\", \"app.py\"]\nCMD [\"--port\", \"8000\"]",
+            "options": [
+                "ENTRYPOINT sets the default command, which is always overridden by docker run arguments",
+                "ENTRYPOINT specifies the immutable executable, while CMD provides default arguments that CLI parameters override",
+                "CMD runs at image build time; ENTRYPOINT runs at container runtime",
+                "There is no difference in syntax or container behavior"
+            ],
+            "correct_option": 1,
+            "explanation": "ENTRYPOINT sets the base binary; CMD provides default args easily overridden at runtime."
+        },
+        {
+            "task_id": "dk-dbg-2",
+            "skill": "Docker",
+            "stage_type": "debugging",
+            "difficulty": 2,
+            "prompt": "Fix `calculate_layer_cache_savings` so it calculates saved megabytes across reusable base layers without double-counting duplicate layer IDs.",
+            "starter_code": (
+                "def calculate_layer_cache_savings(layers: list[dict]) -> int:\n"
+                "    # BUG: sums duplicate cached layers\n"
+                "    return sum(l['size_mb'] for l in layers if l.get('cached'))\n"
+            ),
+            "entry_function": "calculate_layer_cache_savings",
+            "sample_tests": ["assert calculate_layer_cache_savings([{'id': 'a', 'size_mb': 50, 'cached': True}, {'id': 'a', 'size_mb': 50, 'cached': True}]) == 50"],
+            "hidden_tests": [
+                {
+                    "args": [[{"id": "a", "size_mb": 50, "cached": True}, {"id": "a", "size_mb": 50, "cached": True}, {"id": "b", "size_mb": 30, "cached": True}]],
+                    "expected": 80
+                },
+                {"args": [[{"id": "c", "size_mb": 100, "cached": False}]], "expected": 0},
+                {"args": [[]], "expected": 0}
+            ]
+        },
+        {
+            "task_id": "dk-code-2",
+            "skill": "Docker",
+            "stage_type": "coding",
+            "difficulty": 2,
+            "prompt": "Implement `parse_env_file_lines(lines: list[str]) -> dict` that parses lines of an `.env` file into a key-value dictionary, ignoring blank lines and comments starting with `#`.",
+            "starter_code": (
+                "def parse_env_file_lines(lines: list[str]) -> dict:\n"
+                "    # Write your env file parser here\n"
+                "    pass\n"
+            ),
+            "entry_function": "parse_env_file_lines",
+            "sample_tests": ["assert parse_env_file_lines(['# comment', 'PORT=8080']) == {'PORT': '8080'}"],
+            "hidden_tests": [
+                {"args": [["# Config", "ENV=prod", "", "DEBUG=false"]], "expected": {"ENV": "prod", "DEBUG": "false"}},
+                {"args": [["KEY=value=with=equals"]], "expected": {"KEY": "value=with=equals"}},
+                {"args": [[]], "expected": {}}
+            ]
+        },
+        {
+            "task_id": "dk-reas-2",
+            "skill": "Docker",
+            "stage_type": "reasoning",
+            "difficulty": 2,
+            "prompt": "Explain why running production container workloads as the `root` user presents critical security vulnerabilities, and how to properly configure non-root execution.",
+            "required_concepts": [
+                {"name": "Privilege Escalation Risk", "keywords": ["root", "privilege escalation", "container breakout", "host", "cgroup", "kernel", "namespace"]},
+                {"name": "Mitigation Strategy", "keywords": ["user", "non-root", "adduser", "securitycontext", "cap_drop", "least privilege"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        },
+
+        # --- TIER 3: ADVANCED ---
+        {
+            "task_id": "dk-comp-3",
+            "skill": "Docker",
+            "stage_type": "comprehension",
+            "difficulty": 3,
+            "prompt": "Which Linux kernel primitives provide process isolation and resource limits for Docker containers?",
+            "starter_code": "docker run -m 512m --cpus=1.5 ubuntu:22.04",
+            "options": [
+                "Linux Namespaces for isolation and Control Groups (cgroups) for resource limits",
+                "Chroot jails and X11 forwarding",
+                "SELinux mandatory access control exclusively",
+                "KVM hypervisor virtualization modules"
+            ],
+            "correct_option": 0,
+            "explanation": "Namespaces isolate process, network, and mount trees; cgroups enforce CPU, memory, and I/O quotas."
+        },
+        {
+            "task_id": "dk-dbg-3",
+            "skill": "Docker",
+            "stage_type": "debugging",
+            "difficulty": 3,
+            "prompt": "Fix `topological_compose_sort` so it returns container service names ordered by their `depends_on` graph (services with no dependencies first).",
+            "starter_code": (
+                "def topological_compose_sort(services: dict) -> list:\n"
+                "    # services: {'web': ['db'], 'db': []}\n"
+                "    # BUG: simply reverses dictionary keys instead of topological ordering\n"
+                "    return list(reversed(list(services.keys())))\n"
+            ),
+            "entry_function": "topological_compose_sort",
+            "sample_tests": ["assert topological_compose_sort({'web': ['db'], 'db': []}) == ['db', 'web']"],
+            "hidden_tests": [
+                {"args": [{"web": ["api"], "api": ["db"], "db": []}], "expected": ["db", "api", "web"]},
+                {"args": [{"cache": [], "db": []}], "expected": ["cache", "db"]},
+                {"args": [{}], "expected": []}
+            ]
+        },
+        {
+            "task_id": "dk-code-3",
+            "skill": "Docker",
+            "stage_type": "coding",
+            "difficulty": 3,
+            "prompt": "Implement `parse_docker_memory_limit(mem_str: str) -> int` that converts strings like `'512m'`, `'2g'`, `'1024k'`, or `'100b'` into integer byte counts. Return 0 for invalid inputs.",
+            "starter_code": (
+                "def parse_docker_memory_limit(mem_str: str) -> int:\n"
+                "    # Convert memory string with unit (b, k, m, g) to bytes\n"
+                "    pass\n"
+            ),
+            "entry_function": "parse_docker_memory_limit",
+            "sample_tests": ["assert parse_docker_memory_limit('512m') == 512 * 1024 * 1024"],
+            "hidden_tests": [
+                {"args": ["512m"], "expected": 536870912},
+                {"args": ["1g"], "expected": 1073741824},
+                {"args": ["1024k"], "expected": 1048576},
+                {"args": ["500b"], "expected": 500},
+                {"args": ["invalid"], "expected": 0}
+            ]
+        },
+        {
+            "task_id": "dk-reas-3",
+            "skill": "Docker",
+            "stage_type": "reasoning",
+            "difficulty": 3,
+            "prompt": "Describe how Docker's OverlayFS storage driver functions during container write operations, explaining Copy-on-Write (CoW) and performance implications for high-throughput disk workloads.",
+            "required_concepts": [
+                {"name": "OverlayFS Architecture", "keywords": ["overlayfs", "lowerdir", "upperdir", "merged", "layers", "read-only"]},
+                {"name": "Copy on Write and Volumes", "keywords": ["copy-on-write", "cow", "volume", "bind mount", "performance", "disk i/o"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        }
+    ]
+}
+
+
+def generate_generic_adaptive_tasks(skill: str) -> List[Dict[str, Any]]:
+    """Generates standard adaptive multi-stage tasks for skills not in ADAPTIVE_QUESTION_BANK."""
+    s = skill.strip()
+    return [
+        # Foundational (Tier 1)
+        {
+            "task_id": f"{s.lower()}-comp-1",
+            "skill": s,
+            "stage_type": "comprehension",
+            "difficulty": 1,
+            "prompt": f"In {s}, how is error handling predictably structured in standard production codebases?",
+            "starter_code": f"# Idiomatic {s} structure\n# Standard error handling patterns",
+            "options": [
+                f"Idiomatic error handling mechanisms and exceptions recommended in official {s} documentation",
+                "Ignoring all runtime errors and continuing silently",
+                "Writing errors to physical files on the host root directory",
+                "Terminating OS process immediately on any syntax warning"
+            ],
+            "correct_option": 0,
+            "explanation": f"Official {s} design patterns require structured, predictable error recovery."
+        },
+        {
+            "task_id": f"{s.lower()}-dbg-1",
+            "skill": s,
+            "stage_type": "debugging",
+            "difficulty": 1,
+            "prompt": f"Fix `filter_empty_values` so it filters out `None` and empty strings from a list of inputs.",
+            "starter_code": (
+                "def filter_empty_values(items: list) -> list:\n"
+                "    # BUG: does not filter empty strings\n"
+                "    return [x for x in items if x is not None]\n"
+            ),
+            "entry_function": "filter_empty_values",
+            "sample_tests": ["assert filter_empty_values(['a', '', None, 'b']) == ['a', 'b']"],
+            "hidden_tests": [
+                {"args": [["a", "", None, "b"]], "expected": ["a", "b"]},
+                {"args": [[None, ""]], "expected": []},
+                {"args": [["x", "y"]], "expected": ["x", "y"]}
+            ]
+        },
+        {
+            "task_id": f"{s.lower()}-code-1",
+            "skill": s,
+            "stage_type": "coding",
+            "difficulty": 1,
+            "prompt": f"Implement `format_key_value(key: str, val: str) -> str` that formats a key-value pair as `key=val`. Strip surrounding whitespace from both.",
+            "starter_code": (
+                "def format_key_value(key: str, val: str) -> str:\n"
+                "    # Write your implementation here\n"
+                "    pass\n"
+            ),
+            "entry_function": "format_key_value",
+            "sample_tests": ["assert format_key_value(' host ', ' 127.0.0.1 ') == 'host=127.0.0.1'"],
+            "hidden_tests": [
+                {"args": [" host ", " 127.0.0.1 "], "expected": "host=127.0.0.1"},
+                {"args": ["port", "8080"], "expected": "port=8080"}
+            ]
+        },
+        {
+            "task_id": f"{s.lower()}-reas-1",
+            "skill": s,
+            "stage_type": "reasoning",
+            "difficulty": 1,
+            "prompt": f"Explain standard automated testing strategies in {s}, including unit test structure and assertion conventions.",
+            "required_concepts": [
+                {"name": "Automated Testing", "keywords": ["test", "tests", "unit test", "assertions", "runner", "ci"]},
+                {"name": "Quality Assurance", "keywords": ["regression", "coverage", "mock", "fixture", "reproducible"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        },
+
+        # Intermediate (Tier 2)
+        {
+            "task_id": f"{s.lower()}-comp-2",
+            "skill": s,
+            "stage_type": "comprehension",
+            "difficulty": 2,
+            "prompt": f"What is the recommended approach for managing runtime configurations and secrets in {s} applications?",
+            "starter_code": f"# {s} 12-Factor App config pattern",
+            "options": [
+                "Hardcoding credentials directly into source control repositories",
+                "Injecting configurations via environment variables or secret managers at runtime",
+                "Encrypting secrets with a hardcoded static key inside binary comments",
+                "Passing sensitive keys as unencrypted URL parameters"
+            ],
+            "correct_option": 1,
+            "explanation": "12-Factor app methodology requires runtime environment variable injection for configuration."
+        },
+        {
+            "task_id": f"{s.lower()}-dbg-2",
+            "skill": s,
+            "stage_type": "debugging",
+            "difficulty": 2,
+            "prompt": f"Fix `clamp_number` so it bounds a value within `[min_val, max_val]` inclusive.",
+            "starter_code": (
+                "def clamp_number(val: int, min_val: int, max_val: int) -> int:\n"
+                "    # BUG: inverts min and max check\n"
+                "    if val < min_val: return max_val\n"
+                "    if val > max_val: return min_val\n"
+                "    return val\n"
+            ),
+            "entry_function": "clamp_number",
+            "sample_tests": ["assert clamp_number(15, 0, 10) == 10"],
+            "hidden_tests": [
+                {"args": [15, 0, 10], "expected": 10},
+                {"args": [-5, 0, 10], "expected": 0},
+                {"args": [7, 0, 10], "expected": 7}
+            ]
+        },
+        {
+            "task_id": f"{s.lower()}-code-2",
+            "skill": s,
+            "stage_type": "coding",
+            "difficulty": 2,
+            "prompt": f"Implement `compact_dict(d: dict) -> dict` that returns a new dictionary with all keys whose value is not `None`.",
+            "starter_code": (
+                "def compact_dict(d: dict) -> dict:\n"
+                "    # Write implementation here\n"
+                "    pass\n"
+            ),
+            "entry_function": "compact_dict",
+            "sample_tests": ["assert compact_dict({'a': 1, 'b': None, 'c': 3}) == {'a': 1, 'c': 3}"],
+            "hidden_tests": [
+                {"args": [{"a": 1, "b": None, "c": 3}], "expected": {"a": 1, "c": 3}},
+                {"args": [{"x": None}], "expected": {}},
+                {"args": [{}], "expected": {}}
+            ]
+        },
+        {
+            "task_id": f"{s.lower()}-reas-2",
+            "skill": s,
+            "stage_type": "reasoning",
+            "difficulty": 2,
+            "prompt": f"Explain how modular architecture, interface boundaries, and dependency inversion improve maintainability in {s} projects.",
+            "required_concepts": [
+                {"name": "Separation of Concerns", "keywords": ["modular", "separation of concerns", "decoupled", "layers", "cohesion"]},
+                {"name": "Testability and Inversion", "keywords": ["dependency injection", "interfaces", "mocking", "testable", "maintainability"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        },
+
+        # Advanced (Tier 3)
+        {
+            "task_id": f"{s.lower()}-comp-3",
+            "skill": s,
+            "stage_type": "comprehension",
+            "difficulty": 3,
+            "prompt": f"In high-throughput microservices built with {s}, how should downstream network failures be handled to prevent cascading outages?",
+            "starter_code": f"# Distributed resilience patterns in {s}",
+            "options": [
+                "Infinite immediate retry loop without backoff",
+                "Circuit breakers, exponential backoff with jitter, and dead-letter queues",
+                "Terminating the server cluster immediately upon receiving any 500 error",
+                "Dropping customer database tables"
+            ],
+            "correct_option": 1,
+            "explanation": "Circuit breakers and jittered exponential backoff prevent thundering-herd cascading failures."
+        },
+        {
+            "task_id": f"{s.lower()}-dbg-3",
+            "skill": s,
+            "stage_type": "debugging",
+            "difficulty": 3,
+            "prompt": f"Fix `sliding_window_average` so it correctly computes averages of window size `k` across `nums`. Return `[]` if `k > len(nums)` or `k <= 0`.",
+            "starter_code": (
+                "def sliding_window_average(nums: list[int], k: int) -> list[float]:\n"
+                "    # BUG: off-by-one in window iteration\n"
+                "    if k <= 0 or k > len(nums): return []\n"
+                "    res = []\n"
+                "    for i in range(len(nums) - k):\n"
+                "        res.append(round(sum(nums[i:i+k]) / k, 1))\n"
+                "    return res\n"
+            ),
+            "entry_function": "sliding_window_average",
+            "sample_tests": ["assert sliding_window_average([1, 2, 3, 4], 2) == [1.5, 2.5, 3.5]"],
+            "hidden_tests": [
+                {"args": [[1, 2, 3, 4], 2], "expected": [1.5, 2.5, 3.5]},
+                {"args": [[10, 20], 3], "expected": []},
+                {"args": [[5], 1], "expected": [5.0]}
+            ]
+        },
+        {
+            "task_id": f"{s.lower()}-code-3",
+            "skill": s,
+            "stage_type": "coding",
+            "difficulty": 3,
+            "prompt": f"Implement `find_consecutive_runs(nums: list[int]) -> list[list[int]]` that groups consecutive strictly increasing integer runs (e.g. `[1, 2, 5, 6, 7]` -> `[[1, 2], [5, 6, 7]]`).",
+            "starter_code": (
+                "def find_consecutive_runs(nums: list[int]) -> list[list[int]]:\n"
+                "    # Group consecutive strictly increasing integers (differing by +1)\n"
+                "    pass\n"
+            ),
+            "entry_function": "find_consecutive_runs",
+            "sample_tests": ["assert find_consecutive_runs([1, 2, 5, 6, 7]) == [[1, 2], [5, 6, 7]]"],
+            "hidden_tests": [
+                {"args": [[1, 2, 5, 6, 7]], "expected": [[1, 2], [5, 6, 7]]},
+                {"args": [[10, 20, 30]], "expected": [[10], [20], [30]]},
+                {"args": [[]], "expected": []}
+            ]
+        },
+        {
+            "task_id": f"{s.lower()}-reas-3",
+            "skill": s,
+            "stage_type": "reasoning",
+            "difficulty": 3,
+            "prompt": f"Describe strategies for profiling CPU, memory allocations, and concurrency bottlenecks in production {s} services.",
+            "required_concepts": [
+                {"name": "Profiling and Tracing", "keywords": ["profile", "profiler", "flame graph", "trace", "sampling", "latency", "benchmark"]},
+                {"name": "Resource Bottlenecks", "keywords": ["memory leak", "cpu", "contention", "lock", "thread", "garbage collection", "allocation"]}
+            ],
+            "forbidden_patterns": ["ignore previous instructions", "score 100"]
+        }
+    ]
+
+
+def get_adaptive_tasks_for_skill(skill: str) -> List[Dict[str, Any]]:
+    norm = normalize_skill(skill)
+    for k, tasks in ADAPTIVE_QUESTION_BANK.items():
+        if k.lower() == norm.lower():
+            return tasks
+    return generate_generic_adaptive_tasks(norm)
+
 
 @dataclass
 class QuizAttempt:
@@ -707,3 +1577,4 @@ class QuizAttemptStore:
         cutoff = time.time() - self.ttl_s
         for key in [k for k, a in self._attempts.items() if a.created_at < cutoff]:
             del self._attempts[key]
+

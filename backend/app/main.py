@@ -1,5 +1,6 @@
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Depends, Request
@@ -9,7 +10,9 @@ from pydantic import BaseModel, Field
 from .schemas import (
     ClaimsDocument, EvidenceDocument, PassportDocument,
     SimulationRequest, SimulationResult, QuizResult, QuizSubmission,
-    ApplyQuizRequest, AuditStep, CertificateEvidence, PillarScores
+    ApplyQuizRequest, AuditStep, RunAuditLog, StartAssessmentRequest,
+    TaskSubmissionRequest, StepEvaluationResult, VerdictEnum,
+    CertificateEvidence, PillarScores
 )
 from .skills import normalize_skill
 from .jobs import JobManager, JobFailure, QueueFullError
@@ -24,7 +27,8 @@ from .module2_harvester.repo_source import local_repos_allowed
 from .module2_harvester.harvester_service import MAX_REPOS
 from .module4_certs import CertificateParser
 from .module3_rubric import (
-    PassportService, QuestionBankEngine, QuizAttemptStore, CryptoSigner, GRADE_WEIGHTS, DeterministicScoringEngine
+    PassportService, QuestionBankEngine, QuizAttemptStore, CryptoSigner, GRADE_WEIGHTS,
+    AdaptiveAssessmentEngine, CONTRADICTED_POINTS, DeterministicScoringEngine
 )
 from .schemas import VerdictEnum
 from .data.demo_personas import (
@@ -59,6 +63,7 @@ pdf_parser = PDFParser()
 harvester = EvidenceHarvesterService()
 passport_svc = PassportService()
 quiz_engine = QuestionBankEngine()
+adaptive_engine = AdaptiveAssessmentEngine(storage_dir=".sessions")
 quiz_attempts = QuizAttemptStore()
 jobs = JobManager()
 # Each analysis clones and blames repositories, so they are limited per client address
@@ -315,7 +320,48 @@ def simulate_what_if(req: SimulationRequest):
     return passport_svc.simulate_what_if(req)
 
 
-# --- Challenge Quiz Engine ---
+# --- Outlier-Style Adaptive Technical Assessment Engine ---
+@app.post("/api/assessment/start")
+def start_assessment(req: StartAssessmentRequest):
+    try:
+        return adaptive_engine.start_session(
+            skill=req.skill,
+            passport_hash=req.passport_hash or "",
+            initial_verdict=req.initial_verdict
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/assessment/start/{skill}")
+def start_assessment_get(skill: str, initial_verdict: Optional[str] = None):
+    try:
+        return adaptive_engine.start_session(skill=skill, initial_verdict=initial_verdict)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/assessment/submit-step", response_model=StepEvaluationResult)
+def submit_assessment_step(req: TaskSubmissionRequest):
+    try:
+        session = adaptive_engine.sessions.get(req.session_id)
+        skill_name = session["skill"] if session else ""
+        res = adaptive_engine.submit_step(req)
+        if res.is_complete and res.final_grade:
+            attempt_id = quiz_attempts.record(
+                normalize_skill(skill_name),
+                res.final_grade,
+                res.final_weighted_score or 0.0
+            )
+            res.attempt_id = attempt_id
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Assessment step evaluation failed: {e}")
+
+
+# --- Challenge Quiz Engine (Backward-Compatible) ---
 @app.get("/api/quiz/{skill}")
 def get_quiz(skill: str):
     # Answers and explanations stay on the server until the quiz is submitted
@@ -338,12 +384,13 @@ def submit_quiz(sub: QuizSubmission):
 @app.post("/api/quiz/apply", response_model=PassportDocument)
 def apply_quiz_grade(req: ApplyQuizRequest):
     """
-    Applies a graded skill challenge to a passport and re-signs it.
+    Applies a graded skill challenge (standard or adaptive) to a passport and re-signs it.
 
     Two checks keep this from becoming a way to get arbitrary passports signed:
     - the passport must carry a valid signature from this server, so it can't have been edited;
     - the grade comes from the server's record of a submitted quiz (single use), not from the client.
     Only the challenged skill's grade and points change: Evidence x Grade Weight + Consistency Bonus (max 100).
+    An assessment grade can boost CLAIMED_ONLY or PARTIALLY_SUPPORTED points, but can never override CONTRADICTED.
     """
     passport = req.passport
     signed_payload = passport.model_dump(mode="json")
@@ -368,7 +415,6 @@ def apply_quiz_grade(req: ApplyQuizRequest):
     skill_item.final_points = DeterministicScoringEngine.calculate_skill_points(
         skill_item.evidence_score, grade, consistency_bonus=skill_item.consistency_bonus
     )
-    passport.overall_score = DeterministicScoringEngine.overall_score([s.final_points for s in passport.skills])
 
     # Clean up pending quiz notice
     skill_item.signals = [s for s in skill_item.signals if "Quiz Pending" not in s]
@@ -395,7 +441,23 @@ def apply_quiz_grade(req: ApplyQuizRequest):
     else:
         passport.overall_score = DeterministicScoringEngine.overall_score([s.final_points for s in passport.skills])
 
-    if passport.audit_log:
+    if passport.audit_log is None:
+        passport.audit_log = RunAuditLog(
+            audit_id=f"audit_{uuid.uuid4().hex[:10]}",
+            candidate_name=passport.candidate_name,
+            traces=[],
+            generated_at=datetime.now(timezone.utc).isoformat()
+        )
+
+    if req.trajectory:
+        passport.audit_log.traces.append(AuditStep(
+            step="ADAPTIVE_ASSESSMENT_COMPLETED",
+            target=skill_item.name,
+            rule_applied=f"Trajectory: {req.trajectory} | Weighted: {attempt.percentage}%",
+            verdict_reached=f"Grade {grade} applied; HMAC-SHA256 passport re-signed",
+            timestamp=datetime.now(timezone.utc).isoformat()
+        ))
+    else:
         passport.audit_log.traces.append(AuditStep(
             step="CHALLENGE_TEST_COMPLETED",
             target=skill_item.name,
