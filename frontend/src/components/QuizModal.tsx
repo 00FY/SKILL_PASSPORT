@@ -61,15 +61,16 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
     setFinalResult(null);
     setAppliedPassport(null);
 
-    // Look up skill verdict in passport for repo-seeded difficulty
-    const skillItem = passport?.skills.find(
-      s => s.name.toLowerCase() === skillName.toLowerCase()
-    );
+    if (!passport) {
+      setError('Open a passport first: an assessment is tied to a signed passport.');
+      setLoading(false);
+      return;
+    }
 
+    // The server reads the starting difficulty from the passport's own verdict
     postJson<{ session_id: string; task: PublicTaskItem }>('/api/assessment/start', {
       skill: skillName,
-      initial_verdict: skillItem?.verdict,
-      passport_hash: passport?.tamper_proof_hash || ''
+      passport
     })
       .then(res => {
         setSessionId(res.session_id);
@@ -126,13 +127,12 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
           try {
             const updated = await postJson<PassportDocument>('/api/quiz/apply', {
               passport,
-              attempt_id: res.attempt_id,
-              trajectory: res.trajectory
+              attempt_id: res.attempt_id
             });
             setAppliedPassport(updated);
             onPassportUpdated?.(updated);
           } catch (applyErr) {
-            console.error('Failed to apply assessment score to passport:', applyErr);
+            setError(`Your grade couldn't be added to the passport: ${(applyErr as Error).message}`);
           }
         }
       }
@@ -204,7 +204,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
                 </span>
               </div>
               <p className="text-xs text-zinc-400">
-                Outlier-style staircase evaluation · AST-sandboxed verification
+                Outlier-style staircase evaluation · sandboxed code execution
               </p>
             </div>
           </div>

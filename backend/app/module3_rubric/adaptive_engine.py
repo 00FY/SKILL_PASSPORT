@@ -1,7 +1,9 @@
 import os
+import re
 import json
 import ast
-import uuid
+import secrets
+import threading
 from typing import Dict, Any, List, Optional
 from ..schemas import (
     StageType, DifficultyTier, PublicTaskItem,
@@ -9,7 +11,8 @@ from ..schemas import (
 )
 from .question_bank import ADAPTIVE_QUESTION_BANK, get_adaptive_tasks_for_skill, generate_generic_adaptive_tasks
 from ..module1_extractor.injection_guard import PromptInjectionDefense
-from .sandbox import CodeSandbox
+from .sandbox import CodeSandbox, SandboxUnavailable
+from ..skills import normalize_skill
 
 BANNED_AST_NAMES = {
     "os", "sys", "subprocess", "socket", "shutil", "pathlib", "open", "eval", "exec", "__import__",
@@ -18,6 +21,13 @@ BANNED_AST_NAMES = {
 BANNED_ATTRIBUTES = {"__subclasses__", "__globals__", "__code__", "__builtins__"}
 STAGE_SEQUENCE = [StageType.COMPREHENSION, StageType.DEBUGGING, StageType.CODING, StageType.REASONING]
 DIFFICULTY_WEIGHTS = {1: 1.0, 2: 1.5, 3: 2.2}
+# Session ids are generated here and only ever used in this exact shape, including as file names
+SESSION_ID_RE = re.compile(r"^asmt_[0-9a-f]{32}$")
+MAX_ATTEMPTS_PER_SKILL = int(os.getenv("SKILL_PASSPORT_ASSESSMENT_ATTEMPTS", "2"))
+
+
+class AttemptLimitReached(ValueError):
+    pass
 
 
 class AdaptiveAssessmentEngine:
@@ -29,10 +39,16 @@ class AdaptiveAssessmentEngine:
     def __init__(self, storage_dir: Optional[str] = None, sandbox: Optional[CodeSandbox] = None):
         self.storage_dir = storage_dir
         self.sandbox = sandbox or CodeSandbox()
+        self.max_attempts = MAX_ATTEMPTS_PER_SKILL
+        # (passport key, skill) -> sessions started; in memory, like the quiz attempt store
+        self._attempts: Dict[tuple, int] = {}
+        self._lock = threading.Lock()
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.injection_guard = PromptInjectionDefense()
 
     def _get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        if not isinstance(session_id, str) or not SESSION_ID_RE.match(session_id):
+            return None
         if session_id in self.sessions:
             return self.sessions[session_id]
         if self.storage_dir:
@@ -51,7 +67,7 @@ class AdaptiveAssessmentEngine:
         return None
 
     def _save_session(self, session_id: str) -> None:
-        if not self.storage_dir:
+        if not self.storage_dir or not SESSION_ID_RE.match(session_id):
             return
         session = self.sessions.get(session_id)
         if not session:
@@ -74,7 +90,17 @@ class AdaptiveAssessmentEngine:
         passport_hash: str = "",
         initial_verdict: Optional[str] = None
     ) -> Dict[str, Any]:
-        session_id = f"asmt_{uuid.uuid4().hex[:12]}"
+        if passport_hash:
+            key = (passport_hash, normalize_skill(skill).lower())
+            with self._lock:
+                used = self._attempts.get(key, 0)
+                if used >= self.max_attempts:
+                    raise AttemptLimitReached(
+                        f"The {skill} assessment can be taken {self.max_attempts} times per passport; "
+                        "all attempts are used."
+                    )
+                self._attempts[key] = used + 1
+        session_id = f"asmt_{secrets.token_hex(16)}"
 
         # Repo-Seeded Starting Difficulty
         if initial_verdict == "CLAIMED_ONLY":
@@ -93,6 +119,7 @@ class AdaptiveAssessmentEngine:
             "current_stage_idx": 0,
             "current_difficulty": start_diff,
             "seen_task_ids": {first_task["task_id"]},
+            "current_task_id": first_task["task_id"],
             "history": [],
             "completed": False,
         }
@@ -100,10 +127,22 @@ class AdaptiveAssessmentEngine:
         return {"session_id": session_id, "task": self._to_public(first_task)}
 
     def submit_step(self, req: TaskSubmissionRequest) -> StepEvaluationResult:
-        session = self._get_session(req.session_id)
-        if not session or session["completed"]:
-            raise ValueError("Invalid or already completed assessment session.")
+        with self._lock:
+            session = self._get_session(req.session_id)
+            if not session or session["completed"]:
+                raise ValueError("Invalid or already completed assessment session.")
+            # Only the task this session served last can be answered, and only once
+            if not session.get("current_task_id") or req.task_id != session["current_task_id"]:
+                raise ValueError("This task is not the current step of the assessment.")
+            session["current_task_id"] = None
+        try:
+            return self._grade_step(session, req)
+        except Exception:
+            # Nothing was recorded (e.g. the code runner was busy), so the same step can be submitted again
+            session["current_task_id"] = req.task_id
+            raise
 
+    def _grade_step(self, session: Dict[str, Any], req: TaskSubmissionRequest) -> StepEvaluationResult:
         task = self._get_task_by_id(session["skill"], req.task_id)
         stage_type = StageType(task["stage_type"])
 
@@ -192,6 +231,7 @@ class AdaptiveAssessmentEngine:
             session["skill"], next_stage, next_diff, session["seen_task_ids"]
         )
         session["seen_task_ids"].add(next_task["task_id"])
+        session["current_task_id"] = next_task["task_id"]
         self._save_session(req.session_id)
 
         return StepEvaluationResult(
@@ -243,7 +283,8 @@ class AdaptiveAssessmentEngine:
             ok = ok_value and kind == "json" and actual == t.get("expected")
             if ok:
                 passed_count += 1
-            results.append({"test_case": idx, "passed": ok, "expected": t.get("expected"), "actual": actual})
+            # Hidden tests stay hidden: the candidate sees pass/fail, not the expected values
+            results.append({"test_case": idx, "passed": ok})
 
         score = round(passed_count / len(tests), 2) if tests else 0.0
         return score, results, f"Passed {passed_count}/{len(tests)} automated test cases."

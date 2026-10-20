@@ -19,7 +19,7 @@ def test_code_runs_in_a_separate_process(engine):
     code = "def f(x):\n    return x * 2\n"
     score, results, _ = engine._evaluate_code_safely(code, "f", [{"args": [21], "expected": 42}])
     assert score == 1.0
-    assert results[0]["actual"] == 42
+    assert results[0]["passed"] is True
 
 
 def test_expected_values_never_enter_the_sandbox():
@@ -96,7 +96,7 @@ def test_non_json_return_value_never_matches(engine):
     code = "def f():\n    return {1, 2}\n"
     score, results, _ = engine._evaluate_code_safely(code, "f", [{"args": [], "expected": "{1, 2}"}])
     assert score == 0.0
-    assert results[0]["actual"] == "{1, 2}"
+    assert results[0]["passed"] is False
 
 
 def test_oversized_submission_is_rejected(engine):

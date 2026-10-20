@@ -31,6 +31,7 @@ from .module3_rubric import (
     PassportService, QuestionBankEngine, QuizAttemptStore, CryptoSigner, GRADE_WEIGHTS,
     AdaptiveAssessmentEngine, CONTRADICTED_POINTS, DeterministicScoringEngine
 )
+from .module3_rubric.adaptive_engine import AttemptLimitReached
 from .schemas import VerdictEnum
 from .data.demo_personas import (
     PRIYA_CLAIMS, PRIYA_EVIDENCE,
@@ -322,22 +323,35 @@ def simulate_what_if(req: SimulationRequest):
 
 
 # --- Outlier-Style Adaptive Technical Assessment Engine ---
+def _passport_key(passport: PassportDocument) -> str:
+    # passport_id survives re-signing; older passports without one fall back to their signature
+    return passport.passport_id or passport.tamper_proof_hash
+
+
 @app.post("/api/assessment/start")
 def start_assessment(req: StartAssessmentRequest):
+    """
+    Starts an adaptive assessment for one claim of a signed passport. The passport decides the starting
+    difficulty, and each passport gets a limited number of attempts per skill, so a grade can't be
+    farmed by retrying until it comes out high.
+    """
+    passport = req.passport
+    if not CryptoSigner.verify_passport_signature(passport.model_dump(mode="json"), passport.tamper_proof_hash)["valid"]:
+        raise HTTPException(status_code=400, detail="This passport's signature is invalid, so an assessment can't be started for it.")
+    target = normalize_skill(req.skill).lower()
+    skill_item = next((s for s in passport.skills if normalize_skill(s.name).lower() == target), None)
+    if not skill_item:
+        raise HTTPException(status_code=404, detail=f"Skill '{req.skill}' is not one of this passport's claims.")
+    if skill_item.verdict == VerdictEnum.CONTRADICTED:
+        raise HTTPException(status_code=409, detail=f"{skill_item.name} is contradicted by repository evidence; an assessment can't override that.")
     try:
         return adaptive_engine.start_session(
-            skill=req.skill,
-            passport_hash=req.passport_hash or "",
-            initial_verdict=req.initial_verdict
+            skill=skill_item.name,
+            passport_hash=_passport_key(passport),
+            initial_verdict=skill_item.verdict.value,
         )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.get("/api/assessment/start/{skill}")
-def start_assessment_get(skill: str, initial_verdict: Optional[str] = None):
-    try:
-        return adaptive_engine.start_session(skill=skill, initial_verdict=initial_verdict)
+    except AttemptLimitReached as e:
+        raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -345,14 +359,15 @@ def start_assessment_get(skill: str, initial_verdict: Optional[str] = None):
 @app.post("/api/assessment/submit-step", response_model=StepEvaluationResult)
 def submit_assessment_step(req: TaskSubmissionRequest):
     try:
-        session = adaptive_engine.sessions.get(req.session_id)
-        skill_name = session["skill"] if session else ""
         res = adaptive_engine.submit_step(req)
         if res.is_complete and res.final_grade:
+            session = adaptive_engine.sessions[req.session_id]
             attempt_id = quiz_attempts.record(
-                normalize_skill(skill_name),
+                normalize_skill(session["skill"]),
                 res.final_grade,
-                res.final_weighted_score or 0.0
+                res.final_weighted_score or 0.0,
+                passport_key=session.get("passport_hash") or None,
+                trajectory=res.trajectory,
             )
             res.attempt_id = attempt_id
         return res
@@ -404,6 +419,9 @@ def apply_quiz_grade(req: ApplyQuizRequest):
     if attempt is None:
         raise HTTPException(status_code=400, detail="Unknown, expired or already used quiz attempt. Take the challenge again.")
 
+    if attempt.passport_key and attempt.passport_key != _passport_key(passport):
+        raise HTTPException(status_code=400, detail="This assessment was taken for a different passport.")
+
     target_skill = attempt.skill.lower()
     skill_item = next((s for s in passport.skills if normalize_skill(s.name).lower() == target_skill), None)
     if not skill_item:
@@ -452,11 +470,12 @@ def apply_quiz_grade(req: ApplyQuizRequest):
             generated_at=datetime.now(timezone.utc).isoformat()
         )
 
-    if req.trajectory:
+    # The trajectory comes from the server's record, never from the request
+    if attempt.trajectory:
         passport.audit_log.traces.append(AuditStep(
             step="ADAPTIVE_ASSESSMENT_COMPLETED",
             target=skill_item.name,
-            rule_applied=f"Trajectory: {req.trajectory} | Weighted: {attempt.percentage}%",
+            rule_applied=f"Trajectory: {attempt.trajectory} | Weighted: {attempt.percentage}%",
             verdict_reached=f"Grade {grade} applied; HMAC-SHA256 passport re-signed",
             timestamp=datetime.now(timezone.utc).isoformat()
         ))

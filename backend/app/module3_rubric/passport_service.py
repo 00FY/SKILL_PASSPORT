@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from ..schemas import (
@@ -109,6 +110,7 @@ class PassportService:
             certificates=claims_doc.certificates,
             tamper_proof_hash="",
             issued_at=issued_at_str,
+            passport_id=f"pp_{secrets.token_hex(12)}",
             audit_log=audit_log
         )
 

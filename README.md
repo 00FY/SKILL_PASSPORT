@@ -219,6 +219,7 @@ Open [http://localhost:3000](http://localhost:3000), then click **Analyze a resu
 | `SKILL_PASSPORT_WORKERS` / `SKILL_PASSPORT_MAX_PENDING_JOBS` | 2 / 20 | Concurrent background analyses, and how many may be queued before new ones get "server busy". |
 | `SKILL_PASSPORT_SANDBOX` | `process` | Where assessment code runs. `process`: a separate, isolated Python process with CPU, memory, file and process limits (kernel limits are Linux/macOS only). `docker`: a container with no network, a read-only filesystem and no capabilities. Use `docker` on any server other people can reach. |
 | `SKILL_PASSPORT_SANDBOX_IMAGE` | `python:3.11-slim` | Image used in `docker` mode. |
+| `SKILL_PASSPORT_ASSESSMENT_ATTEMPTS` | `2` | Adaptive assessment attempts per passport and skill. |
 
 ### 5. API overview
 

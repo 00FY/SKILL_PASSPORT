@@ -115,9 +115,31 @@ def test_reasoning_rubric_evaluation_and_injection_defense():
     assert "Concurrency solution" in hits
 
 
+def _signed_passport(skills=None):
+    from app.module3_rubric import CryptoSigner
+    passport = PassportDocument(
+        candidate_name="Jane Doe",
+        applied_role="Backend Engineer",
+        role_match_pct=80,
+        overall_score=70,
+        skills=skills or [
+            SkillPassportItem(name="Python", category="language", verdict=VerdictEnum.VERIFIED,
+                              level="Intermediate", evidence_score=8, test_grade="C", final_points=48, signals=[]),
+        ],
+        refusal_panel=[],
+        learning_plan=[],
+        security_alerts=[],
+        tamper_proof_hash="",
+        issued_at="2026-01-01T00:00:00Z",
+        passport_id="pp_test_workflow",
+    )
+    passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
+    return passport
+
+
 def test_full_adaptive_assessment_workflow_via_api():
-    # 1. Start assessment for Python
-    start_res = client.post("/api/assessment/start", json={"skill": "Python", "initial_verdict": "VERIFIED"})
+    # 1. Start assessment for Python (VERIFIED in the passport -> starts at Tier 2)
+    start_res = client.post("/api/assessment/start", json={"skill": "Python", "passport": _signed_passport().model_dump()})
     assert start_res.status_code == 200
     data = start_res.json()
     session_id = data["session_id"]
@@ -248,11 +270,13 @@ def test_apply_assessment_updates_passport_and_respects_contradicted():
         learning_plan=[],
         security_alerts=[],
         tamper_proof_hash="",
-        issued_at="2026-01-01T00:00:00Z"
+        issued_at="2026-01-01T00:00:00Z",
+        passport_id="pp_test_apply"
     )
     passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
 
-    py_attempt = quiz_attempts.record("Python", "A", 95.0)
+    py_attempt = quiz_attempts.record("Python", "A", 95.0, passport_key="pp_test_apply",
+                                      trajectory="T2(Pass)->T3(Pass)->T3(Pass)->T3(Pass)")
 
     # Apply Grade A to Python (evidence_score=8, weight=10 -> 80 pts)
     apply_res = client.post("/api/quiz/apply", json={
@@ -332,3 +356,112 @@ def test_session_persistence_across_engine_reloads(tmp_path):
     assert res2.task_id == task2.task_id
     assert session_id in engine2.sessions
 
+
+
+# --- Assessment integrity: sessions belong to a signed passport ---
+
+def _start(passport, skill="Python"):
+    return client.post("/api/assessment/start", json={"skill": skill, "passport": passport.model_dump()})
+
+
+def test_start_requires_a_validly_signed_passport():
+    passport = _signed_passport()
+    passport.overall_score = 99  # edited after signing
+    res = _start(passport)
+    assert res.status_code == 400
+    assert "signature is invalid" in res.json()["detail"]
+
+
+def test_start_rejects_unknown_and_contradicted_skills():
+    passport = _signed_passport(skills=[
+        SkillPassportItem(name="FastAPI", category="framework", verdict=VerdictEnum.CONTRADICTED,
+                          level="Beginner", evidence_score=0, test_grade="E", final_points=10, signals=[]),
+    ])
+    assert _start(passport, "Python").status_code == 404
+    assert _start(passport, "FastAPI").status_code == 409
+
+
+def test_starting_difficulty_comes_from_the_passport_not_the_request():
+    passport = _signed_passport(skills=[
+        SkillPassportItem(name="Python", category="language", verdict=VerdictEnum.CLAIMED_ONLY,
+                          level="Beginner", evidence_score=2, test_grade="E", final_points=8, signals=[]),
+    ])
+    passport.passport_id = None
+    from app.module3_rubric import CryptoSigner
+    passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
+    res = client.post("/api/assessment/start", json={
+        "skill": "Python", "passport": passport.model_dump(), "initial_verdict": "VERIFIED"
+    })
+    assert res.status_code == 200
+    assert res.json()["task"]["difficulty"] == DifficultyTier.FOUNDATIONAL
+
+
+def test_attempts_are_limited_per_passport_and_skill():
+    from app.main import adaptive_engine
+    passport = _signed_passport()
+    passport.passport_id = "pp_attempt_limit"
+    from app.module3_rubric import CryptoSigner
+    passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
+    for _ in range(adaptive_engine.max_attempts):
+        assert _start(passport).status_code == 200
+    blocked = _start(passport)
+    assert blocked.status_code == 429
+    assert "attempts are used" in blocked.json()["detail"]
+
+
+def test_only_the_current_task_can_be_answered_once():
+    data = _start(_signed_passport_with_id("pp_current_task")).json()
+    sid, task = data["session_id"], data["task"]
+    other_task = "py-comp-3" if task["task_id"] != "py-comp-3" else "py-comp-1"
+    wrong = client.post("/api/assessment/submit-step", json={"session_id": sid, "task_id": other_task, "selected_option": 0})
+    assert wrong.status_code == 400
+    first = client.post("/api/assessment/submit-step", json={"session_id": sid, "task_id": task["task_id"], "selected_option": 0})
+    assert first.status_code == 200
+    again = client.post("/api/assessment/submit-step", json={"session_id": sid, "task_id": task["task_id"], "selected_option": 1})
+    assert again.status_code == 400
+
+
+def test_malformed_session_ids_are_refused_without_touching_disk(tmp_path):
+    engine = AdaptiveAssessmentEngine(storage_dir=str(tmp_path))
+    (tmp_path.parent / "outside.json").write_text('{"completed": false}')
+    for bad in ["../outside", "asmt_../../x", "asmt_" + "g" * 32, ""]:
+        assert engine._get_session(bad) is None
+    res = client.post("/api/assessment/submit-step", json={"session_id": "../../etc/passwd", "task_id": "x"})
+    assert res.status_code == 400
+
+
+def test_hidden_test_values_are_not_returned():
+    engine = AdaptiveAssessmentEngine()
+    code = "def f(x):\n    return x + 1\n"
+    _, results, _ = engine._evaluate_code_safely(code, "f", [{"args": [1], "expected": 2}, {"args": [1], "expected": 99}])
+    assert [r["passed"] for r in results] == [True, False]
+    assert all("expected" not in r and "actual" not in r for r in results)
+
+
+def test_apply_uses_the_servers_trajectory_and_checks_the_passport():
+    from app.main import quiz_attempts
+    passport = _signed_passport_with_id("pp_apply_owner")
+    attempt = quiz_attempts.record("Python", "B", 75.0, passport_key="pp_someone_else", trajectory="T2(Pass)")
+    res = client.post("/api/quiz/apply", json={"passport": passport.model_dump(), "attempt_id": attempt})
+    assert res.status_code == 400
+    assert "different passport" in res.json()["detail"]
+
+    attempt = quiz_attempts.record("Python", "B", 75.0, passport_key="pp_apply_owner", trajectory="T2(Pass)->T2(Fail)")
+    res = client.post("/api/quiz/apply", json={
+        "passport": passport.model_dump(), "attempt_id": attempt, "trajectory": "T3(Pass)->T3(Pass)->T3(Pass)->T3(Pass)"
+    })
+    assert res.status_code == 200
+    updated = res.json()
+    trace = next(t for t in updated["audit_log"]["traces"] if t["step"] == "ADAPTIVE_ASSESSMENT_COMPLETED")
+    assert "T2(Pass)->T2(Fail)" in trace["rule_applied"]
+    assert "T3(Pass)->T3(Pass)->T3(Pass)->T3(Pass)" not in trace["rule_applied"]
+    # The passport keeps its id after re-signing, so attempt limits carry over
+    assert updated["passport_id"] == "pp_apply_owner"
+
+
+def _signed_passport_with_id(passport_id):
+    from app.module3_rubric import CryptoSigner
+    passport = _signed_passport()
+    passport.passport_id = passport_id
+    passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
+    return passport
