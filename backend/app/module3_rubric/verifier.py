@@ -118,6 +118,33 @@ class FourStateVerifier:
                     suggested_remedy="Publish repositories demonstrating continuous historical development."
                 ), "DURATION_CONTRADICTION_CHECK", "RULE_DURATION_GIT_SPAN_MISMATCH")
 
+        # Certificate Issuer Verification Checks (refusal queue for mismatches)
+        # Certificate Issuer Verification Checks (refusal queue for explicit contradictions only)
+        for cert in claims_doc.certificates:
+            status = getattr(cert, "issuer_status", None)
+            reason_detail = cert.mismatch_reason or ""
+            is_contradicted = (status == "issuer_mismatch") or (
+                status == "unverified" and any(w in reason_detail.lower() for w in ["different recipient", "mismatch"])
+            )
+            if is_contradicted:
+                rec_name = cert.issuer_record.get("recipient_name") if cert.issuer_record else "Unknown"
+                if not reason_detail:
+                    reason_detail = f"Issuer record recipient '{rec_name}' does not match uploaded certificate."
+                if "recipient" in reason_detail.lower():
+                    remedy = "Ensure candidate identity on official issuer portal matches resume name, or provide matching credential."
+                elif "title" in reason_detail.lower():
+                    remedy = "Ensure the uploaded PDF corresponds to the credential title on the issuer verification portal."
+                else:
+                    remedy = "Provide a verifiable credential matching candidate profile."
+
+                refuse(f"Cert:{cert.certificate_name}", RefusalItem(
+                    claim=f"Credential: {cert.certificate_name} ({cert.issuer})",
+                    verdict=VerdictEnum.CONTRADICTED,
+                    reason=f"Needs Review: {reason_detail}",
+                    evidence_found=f"Official issuer record at {cert.verify_url or cert.filename} lists '{rec_name}' / '{cert.certificate_name}'.",
+                    suggested_remedy=remedy
+                ), "CERTIFICATE_VERIFICATION_CHECK", "RULE_CERTIFICATE_ISSUER_MISMATCH")
+
         # 2. Evaluate Skill Claims Against Ground-Truth Evidence
         claims_to_evaluate: List[ClaimItem] = list(claims_doc.claims)
         # If no resume was provided, auto-populate claims from detected skills in code & certificates
@@ -168,7 +195,11 @@ class FourStateVerifier:
                 c for c in claims_doc.certificates
                 if any(normalize_skill(s).lower() == skill_name.lower() for s in c.skills)
             ]
-            has_uploaded_cert = len(matching_certs) > 0
+            verified_certs = [
+                c for c in matching_certs
+                if getattr(c, "issuer_status", "issuer_verified") == "issuer_verified"
+            ]
+            has_uploaded_cert = len(verified_certs) > 0
             has_cert_link = any(any(m in l.lower() for m in CERT_MARKERS) for l in claim.evidence_links)
             has_certificate = has_uploaded_cert or has_cert_link
 
@@ -263,11 +294,17 @@ class FourStateVerifier:
                 s_active_months = ev_skill.active_months if (ev_skill and ev_skill.active_months) else evidence_doc.active_months
                 consistency_bonus, bonus_reasons = self.scoring.calculate_consistency_bonus(s_repo_count, s_active_months)
 
+            cert_status = verified_certs[0].issuer_status if verified_certs else (matching_certs[0].issuer_status if matching_certs else None)
+            from ..module4_certs.matching import name_match
+            cert_name_matched = any(c.candidate_name and claims_doc.candidate_name and name_match(c.candidate_name, claims_doc.candidate_name) for c in matching_certs)
+
             evidence_score, ev_reason = self.scoring.calculate_evidence_score(
                 has_deployed_or_pr=has_deployed_or_pr,
                 has_tests=has_tests and has_code_blame,
                 has_code_blame=has_code_blame,
-                has_certificate=has_certificate
+                has_certificate=has_certificate,
+                cert_status=cert_status,
+                name_matched=cert_name_matched
             )
 
             if verdict == VerdictEnum.CONTRADICTED:
@@ -283,10 +320,12 @@ class FourStateVerifier:
                 final_points = self.scoring.calculate_skill_points(evidence_score, grade, consistency_bonus=consistency_bonus)
                 if consistency_bonus > 0 and bonus_reasons:
                     ev_reason += f" Includes {', '.join(bonus_reasons)}."
-                if matching_certs and not has_code_blame:
-                    ev_reason = f"Verified certificate from {matching_certs[0].issuer}: {matching_certs[0].certificate_name}."
-                elif matching_certs:
-                    ev_reason += f" Backed by verified certificate from {matching_certs[0].issuer} ({matching_certs[0].certificate_name})."
+                if verified_certs and not has_code_blame:
+                    ev_reason = f"Verified certificate from {verified_certs[0].issuer}: {verified_certs[0].certificate_name}."
+                elif verified_certs:
+                    ev_reason += f" Backed by verified certificate from {verified_certs[0].issuer} ({verified_certs[0].certificate_name})."
+                elif matching_certs and any(getattr(c, "issuer_status", None) == "issuer_mismatch" for c in matching_certs):
+                    ev_reason += f" Certificate from {matching_certs[0].issuer} flagged for review (issuer name mismatch)."
                 if not quiz_attempted and has_quiz_bank:
                     ev_reason += " Mandatory challenge quiz pending (take quiz to verify and upgrade from Grade E)."
 
@@ -300,8 +339,10 @@ class FourStateVerifier:
                                              has_deployed_or_pr, has_certificate, in_scope, claim, evidence_doc)
             if not quiz_attempted and has_quiz_bank:
                 signals_list.append("Mandatory Quiz Pending")
-            if matching_certs:
-                signals_list.append(f"Cert: {matching_certs[0].issuer}")
+            if verified_certs:
+                signals_list.append(f"Cert (Verified): {verified_certs[0].issuer}")
+            elif matching_certs:
+                signals_list.append(f"Cert ({matching_certs[0].issuer_status}): {matching_certs[0].issuer}")
 
             if verdict == VerdictEnum.PARTIALLY_SUPPORTED:
                 if not has_code_blame:

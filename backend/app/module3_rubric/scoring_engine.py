@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple, Optional, Set, Any
 
 GRADE_WEIGHTS = {
     "A": 10,
@@ -9,11 +9,13 @@ GRADE_WEIGHTS = {
 }
 
 EVIDENCE_WEIGHTS = {
-    "DEPLOYED_OR_PR": 10,  # Merged PR or Live Deployed URL
-    "TESTS_VERIFIED": 8,   # Unit tests with active assertions
-    "COMMITS_AUTHORED": 7, # Sustained commits & >70% authorship
-    "CERTIFICATE_ONLY": 4, # Verified external certificate
-    "RESUME_ONLY": 2       # Claimed on resume only
+    "DEPLOYED_OR_PR": 10,       # Merged PR or Live Deployed URL
+    "TESTS_VERIFIED": 8,        # Unit tests with active assertions
+    "COMMITS_AUTHORED": 7,     # Sustained commits & >70% authorship
+    "CERT_ISSUER_VERIFIED": 7, # Verified external certificate on official issuer portal
+    "CERT_NAME_MATCHED": 6,    # Certificate with matched candidate name
+    "CERTIFICATE_ONLY": 4,     # Parsed credential only or unparsed
+    "RESUME_ONLY": 2           # Claimed on resume only
 }
 
 # Role match weights per verdict and the per-refusal penalty
@@ -47,7 +49,9 @@ class DeterministicScoringEngine:
         has_deployed_or_pr: bool,
         has_tests: bool,
         has_code_blame: bool,
-        has_certificate: bool
+        has_certificate: bool = False,
+        cert_status: Optional[str] = None,
+        name_matched: bool = False
     ) -> Tuple[int, str]:
         if has_deployed_or_pr:
             return EVIDENCE_WEIGHTS["DEPLOYED_OR_PR"], "Production deployment or merged PR with review"
@@ -56,9 +60,77 @@ class DeterministicScoringEngine:
         elif has_code_blame:
             return EVIDENCE_WEIGHTS["COMMITS_AUTHORED"], "Candidate-authored code in linked repositories"
         elif has_certificate:
-            return EVIDENCE_WEIGHTS["CERTIFICATE_ONLY"], "Certificate link only (the certificate itself is not checked)"
+            if cert_status == "issuer_verified":
+                return EVIDENCE_WEIGHTS["CERT_ISSUER_VERIFIED"], "Verified certificate from official issuer portal"
+            elif name_matched or cert_status == "name_matched":
+                return EVIDENCE_WEIGHTS["CERT_NAME_MATCHED"], "Certificate with candidate name match"
+            else:
+                return EVIDENCE_WEIGHTS["CERTIFICATE_ONLY"], "Certificate link or parsed credential document"
         else:
             return EVIDENCE_WEIGHTS["RESUME_ONLY"], "Claimed on resume only with no code ground-truth"
+
+    @staticmethod
+    def calculate_cert_pillar_score(
+        certificates: List[Any],
+        candidate_name: Optional[str] = None
+    ) -> Optional[int]:
+        """
+        0–100 Certificate Pillar combining certificates via Noisy-OR:
+        cert_score = round(100 * (1 - prod(1 - s_i)))
+        Weights s_i:
+        - 0.75: Issuer-verified, maps to a coding skill
+        - 0.50: Issuer-verified, doesn't map to a coding skill
+        - 0.40: Name matched
+        - 0.20: Parsed only, or issuer_unparsed
+        """
+        if not certificates:
+            return None
+
+        from ..skills import normalize_skill, SKILL_CATALOG
+        from ..module4_certs.matching import name_match
+
+        def is_coding(s_name: str) -> bool:
+            can = normalize_skill(s_name)
+            if can in SKILL_CATALOG:
+                return SKILL_CATALOG[can].category != "soft_skill"
+            return False
+
+        prod_complement = 1.0
+        any_valid = False
+        all_mismatch = True
+
+        for c in certificates:
+            status = getattr(c, "issuer_status", None)
+            is_verified = status in ("verified", "issuer_verified")
+            is_pending = status in ("pending", "issuer_unparsed", "issuer_unreachable")
+            is_contradicted = status in ("issuer_mismatch", "unverified") and any(
+                w in (getattr(c, "mismatch_reason", "") or "").lower() for w in ["different recipient", "mismatch"]
+            )
+
+            if is_contradicted:
+                continue
+
+            all_mismatch = False
+            any_valid = True
+
+            c_name = getattr(c, "candidate_name", None)
+            c_skills = getattr(c, "skills", []) or []
+
+            if is_verified:
+                maps_to_coding = any(is_coding(s) for s in c_skills)
+                s_i = 0.75 if maps_to_coding else 0.50
+            elif c_name and candidate_name and name_match(c_name, candidate_name):
+                s_i = 0.40
+            else:
+                s_i = 0.20
+
+            prod_complement *= (1.0 - s_i)
+
+        if any_valid:
+            return min(100, max(20, round(100.0 * (1.0 - prod_complement))))
+        elif all_mismatch:
+            return 10  # Mismatch review penalty tier
+        return None
 
     @staticmethod
     def calculate_consistency_bonus(repo_count: int, active_months: int) -> Tuple[int, List[str]]:

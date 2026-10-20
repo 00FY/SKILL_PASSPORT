@@ -53,11 +53,11 @@ class PassportService:
         has_resume = (claims_doc.raw_text_length or 0) > 0
         resume_score: Optional[int] = role_match_pct if has_resume else None
 
-        # Pillar 3: Certificate score (None if no certificates uploaded)
-        cert_score: Optional[int] = None
-        if claims_doc.certificates:
-            cert_sum = sum(min(1.0, c.confidence_score) * 50 for c in claims_doc.certificates)
-            cert_score = round(min(100, max(20, cert_sum)))
+        # Pillar 3: Certificate score (0–100 Noisy-OR combination of verified credentials)
+        cert_score: Optional[int] = DeterministicScoringEngine.calculate_cert_pillar_score(
+            claims_doc.certificates,
+            candidate_name=claims_doc.candidate_name
+        )
 
         # Pillar 4: Mandatory Quiz score
         tested_skills = [s for s in skills if challenge_grades and s.name.lower() in {k.lower(): v for k, v in challenge_grades.items()}]
