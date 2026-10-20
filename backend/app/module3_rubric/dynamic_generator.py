@@ -9,6 +9,30 @@ from typing import Dict, Any, List, Optional
 from ..schemas import StageType, DifficultyTier
 from .question_bank import get_adaptive_tasks_for_skill, generate_generic_adaptive_tasks, ADAPTIVE_QUESTION_BANK
 
+def _load_env_if_present() -> None:
+    env_paths = [
+        os.path.join(os.getcwd(), ".env"),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env")),
+    ]
+    for p in env_paths:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip().strip("\"'")
+                            if k not in os.environ:
+                                os.environ[k] = v
+                break
+            except Exception:
+                pass
+
+
+_load_env_if_present()
+
 logger = logging.getLogger(__name__)
 
 GENERATOR_SYSTEM_PROMPT = """You are an elite software engineering interviewer and evaluation engine for Skill Passport.
@@ -121,7 +145,7 @@ class DynamicQuestionGenerator:
         }
 
         try:
-            res = httpx.post(url, json=payload, headers={"x-goog-api-key": api_key}, timeout=15.0)
+            res = httpx.post(url, json=payload, headers={"x-goog-api-key": api_key}, timeout=25.0)
             res.raise_for_status()
             text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
             data = json.loads(text)
@@ -153,7 +177,7 @@ class DynamicQuestionGenerator:
         }
 
         try:
-            res = httpx.post(url, headers=headers, json=payload, timeout=15.0)
+            res = httpx.post(url, headers=headers, json=payload, timeout=25.0)
             res.raise_for_status()
             content = res.json()["choices"][0]["message"]["content"]
             data = json.loads(content)
@@ -205,6 +229,56 @@ class DynamicQuestionGenerator:
         data["skill"] = skill
         data["stage_type"] = stage_type.value
         data["difficulty"] = difficulty.value
+
+        # Normalize prompt and starter code aliases
+        if not data.get("prompt"):
+            if data.get("question"):
+                data["prompt"] = data["question"]
+            elif data.get("code_snippet"):
+                data["prompt"] = "Predict the output or behavior of the following code snippet:"
+                if not data.get("starter_code"):
+                    data["starter_code"] = data["code_snippet"]
+            else:
+                data["prompt"] = f"Evaluate the following {skill} scenario."
+
+        if not data.get("starter_code") and data.get("code_snippet"):
+            data["starter_code"] = data["code_snippet"]
+
+        # Normalize comprehension options & correct_option
+        if stage_type == StageType.COMPREHENSION:
+            options = data.get("options", [])
+            correct = data.get("correct_option")
+            if isinstance(correct, str):
+                if correct in options:
+                    data["correct_option"] = options.index(correct)
+                elif correct.strip().isdigit() and int(correct.strip()) < len(options):
+                    data["correct_option"] = int(correct.strip())
+                elif correct.strip().upper() in ["A", "B", "C", "D"]:
+                    idx = ord(correct.strip().upper()) - ord("A")
+                    if idx < len(options):
+                        data["correct_option"] = idx
+
+        # Normalize coding / debugging tests
+        elif stage_type in (StageType.DEBUGGING, StageType.CODING):
+            tests = data.get("hidden_tests", [])
+            norm_tests = []
+            for t in tests:
+                if isinstance(t, dict):
+                    args = t.get("args") if "args" in t else ([t["input"]] if "input" in t else None)
+                    expected = t.get("expected") if "expected" in t else t.get("output")
+                    if args is not None and expected is not None:
+                        if not isinstance(args, list):
+                            args = [args]
+                        norm_tests.append({"args": args, "expected": expected})
+            if norm_tests:
+                data["hidden_tests"] = norm_tests
+
+            if not data.get("sample_tests") and data.get("hidden_tests"):
+                fn = data.get("entry_function", "solve")
+                first = data["hidden_tests"][0]
+                args_str = ", ".join(repr(a) for a in first["args"])
+                data["sample_tests"] = [f"assert {fn}({args_str}) == {repr(first['expected'])}"]
+
         return data
 
     def _validate_task(self, task: Dict[str, Any], stage_type: StageType) -> bool:

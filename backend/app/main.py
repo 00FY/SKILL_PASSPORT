@@ -7,6 +7,31 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Depends, Req
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+
+def _load_env_if_present() -> None:
+    env_paths = [
+        os.path.join(os.getcwd(), ".env"),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env")),
+    ]
+    for p in env_paths:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip().strip("\"'")
+                            if k not in os.environ:
+                                os.environ[k] = v
+                break
+            except Exception:
+                pass
+
+
+_load_env_if_present()
+
 from .schemas import (
     ClaimsDocument, EvidenceDocument, PassportDocument,
     SimulationRequest, SimulationResult, QuizResult, QuizSubmission,
