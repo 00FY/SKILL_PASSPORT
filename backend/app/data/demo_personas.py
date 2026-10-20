@@ -1,6 +1,6 @@
 from ..schemas import (
     ClaimsDocument, ClaimItem, EvidenceDocument, SkillEvidence,
-    QualitySignals, SampleSnippet, SecurityFlag
+    QualitySignals, SampleSnippet, SecurityFlag, CertificateEvidence
 )
 
 # 1. Priya S. (The Honest Candidate)
@@ -45,6 +45,37 @@ PRIYA_CLAIMS = ClaimsDocument(
             category="soft_skill",
             claimed_detail="Led 5-person team on ShopAPI",
             evidence_links=["https://github.com/priya/shop-api"]
+        )
+    ],
+    certificates=[
+        CertificateEvidence(
+            id="cert-priya-01",
+            filename="coursera_docker_devops.pdf",
+            certificate_name="Containerized Microservices with Docker",
+            issuer="Coursera",
+            candidate_name="Priya S.",
+            issue_date="August 15, 2024",
+            credential_id="XYZ123DOCKER",
+            verify_url="https://www.coursera.org/verify/XYZ123DOCKER",
+            skills=["Docker"],
+            confidence_score=1.0,
+            raw_text_snippet="Certificate of Completion awarded to Priya S. for Containerized Microservices with Docker. Verify at https://www.coursera.org/verify/XYZ123DOCKER",
+            issuer_status="issuer_verified",
+            issuer_record={
+                "issuer_name": "Coursera",
+                "recipient_name": "Priya Sharma",
+                "credential_title": "Containerized Microservices with Docker",
+                "issue_date": "August 15, 2024",
+                "credential_id": "XYZ123DOCKER",
+                "verify_url": "https://www.coursera.org/verify/XYZ123DOCKER",
+                "raw_evidence_hash": "a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0",
+                "fetch_timestamp": "2026-10-20T10:30:00Z",
+                "is_valid": True,
+            },
+            verification_timestamp="2026-10-20T10:30:00Z",
+            evidence_hash="a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0",
+            extracted_pointers=["https://www.coursera.org/verify/XYZ123DOCKER"],
+            score_tier=4,
         )
     ]
 )
@@ -315,6 +346,38 @@ RED_TEAM_CLAIMS = ClaimsDocument(
             severity="CRITICAL",
             raw_payload_snippet="Found hidden style markers: color: #ffffff; font-size: 0px hiding text from human eyes.",
             action_taken="Neutralized hidden font styling tags."
+        )
+    ],
+    certificates=[
+        CertificateEvidence(
+            id="cert-redteam-forged",
+            filename="aws_solutions_architect_certified.pdf",
+            certificate_name="AWS Certified Solutions Architect - Associate",
+            issuer="Credly",
+            candidate_name="RedTeam Adversary",  # Edited on PDF to candidate's name!
+            issue_date="May 12, 2024",
+            credential_id="8f5e7f1a-b67e-46ea-9d84-c689c8a49c95",
+            verify_url="https://www.credly.com/badges/8f5e7f1a-b67e-46ea-9d84-c689c8a49c95/public_url",
+            skills=["AWS"],
+            confidence_score=0.0,
+            raw_text_snippet="This is to certify that RedTeam Adversary has earned AWS Certified Solutions Architect - Associate. Verify: https://www.credly.com/badges/8f5e7f1a-b67e-46ea-9d84-c689c8a49c95/public_url",
+            issuer_status="issuer_mismatch",
+            issuer_record={
+                "issuer_name": "Amazon Web Services",
+                "recipient_name": "Marcus Brody",  # Official Credly earner!
+                "credential_title": "AWS Certified Solutions Architect - Associate",
+                "issue_date": "May 12, 2024",
+                "credential_id": "8f5e7f1a-b67e-46ea-9d84-c689c8a49c95",
+                "verify_url": "https://www.credly.com/badges/8f5e7f1a-b67e-46ea-9d84-c689c8a49c95/public_url",
+                "raw_evidence_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "fetch_timestamp": "2026-10-20T12:00:00Z",
+                "is_valid": True,
+            },
+            verification_timestamp="2026-10-20T12:00:00Z",
+            evidence_hash="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            extracted_pointers=["https://www.credly.com/badges/8f5e7f1a-b67e-46ea-9d84-c689c8a49c95/public_url"],
+            mismatch_reason="Issuer record recipient 'Marcus Brody' does not match candidate 'RedTeam Adversary' (PDF name edited).",
+            score_tier=0,
         )
     ]
 )

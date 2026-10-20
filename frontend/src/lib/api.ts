@@ -74,6 +74,13 @@ export interface CertificateEvidence {
   skills: string[];
   confidence_score: number;
   raw_text_snippet?: string | null;
+  issuer_status?: string;
+  issuer_record?: Record<string, any> | null;
+  verification_timestamp?: string | null;
+  evidence_hash?: string | null;
+  extracted_pointers?: string[];
+  mismatch_reason?: string | null;
+  score_tier?: number;
 }
 
 export const discoverRepos = (username: string) =>

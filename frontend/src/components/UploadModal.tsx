@@ -251,8 +251,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
               </span>
               <span className="text-[11px] text-zinc-400">Coursera, AWS, Udemy, etc.</span>
             </div>
-            <p className="mt-0.5 text-xs text-zinc-400">
-              Upload certificate files to verify credentials, issuer accreditation, and skills.
+            <p className="mt-1 text-[11px] text-zinc-400">
+              <span className="text-amber-400 font-medium">Credibility distinction:</span> Certificate provides evidence of learning. GitHub code analysis & SkillProof assessment verify practical demonstration.
             </p>
             <input
               ref={certFileInput}
@@ -273,30 +273,85 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
 
             {certificates.length > 0 && (
               <div className="mt-3 space-y-2">
-                {certificates.map(c => (
-                  <div key={c.id} className="flex items-center justify-between rounded-md border border-white/10 bg-white/[0.02] px-3 py-2 text-xs">
-                    <div>
-                      <div className="font-semibold text-zinc-200">
-                        {c.certificate_name} <span className="text-amber-400 font-normal">({c.issuer})</span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400">
-                        {c.credential_id && <span>ID: {c.credential_id}</span>}
-                        {c.skills.length > 0 && (
-                          <span>· Skills: {c.skills.join(', ')}</span>
+                {certificates.map(c => {
+                  const s = (c.issuer_status || '').toLowerCase();
+                  const isVerified = s === 'verified' || s === 'issuer_verified';
+                  const isPending = s === 'pending' || s === 'issuer_unparsed' || s === 'issuer_unreachable';
+                  const isMismatch = (c.mismatch_reason || '').toLowerCase().includes('recipient') || (c.mismatch_reason || '').toLowerCase().includes('mismatch');
+
+                  return (
+                    <div key={c.id} className="flex items-start justify-between rounded-md border border-white/10 bg-white/[0.02] p-2.5 text-xs">
+                      <div className="space-y-1.5 pr-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-zinc-200">{c.certificate_name}</span>
+                          <span className="text-amber-400 font-normal">({c.issuer})</span>
+                          {isVerified && (
+                            <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                              ✓ Verified
+                            </span>
+                          )}
+                          {isPending && (
+                            <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-semibold text-amber-300" title="Official issuer page recognized; automated parsing pending manual review">
+                              ⏳ Pending verification
+                            </span>
+                          )}
+                          {!isVerified && !isPending && (
+                            <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold border ${
+                              isMismatch
+                                ? 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                                : 'bg-zinc-500/15 border-zinc-500/30 text-zinc-400'
+                            }`}>
+                              {isMismatch ? '⚠ Needs Review: Recipient Mismatch' : 'Unverified'}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
+                          {c.issuer_record?.recipient_name ? (
+                            <span className="text-zinc-300">Official Recipient: <span className="text-white font-medium">{c.issuer_record.recipient_name}</span></span>
+                          ) : c.candidate_name ? (
+                            <span>File Holder: {c.candidate_name}</span>
+                          ) : null}
+
+                          {c.verify_url && (
+                            <a
+                              href={c.verify_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={`inline-flex items-center gap-1 font-medium hover:underline ${
+                                isPending
+                                  ? 'rounded bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-amber-200 hover:bg-amber-500/30'
+                                  : 'text-sky-400'
+                              }`}
+                            >
+                              {isPending ? 'Verify manually ↗' : 'Issuer URL ↗'}
+                            </a>
+                          )}
+
+                          {c.evidence_hash && (
+                            <span className="font-mono text-[10px] text-zinc-500" title={`Evidence SHA-256: ${c.evidence_hash}`}>
+                              SHA: {c.evidence_hash.slice(0, 8)}...
+                            </span>
+                          )}
+                        </div>
+
+                        {c.mismatch_reason && (
+                          <p className={`text-[11px] ${isPending ? 'text-amber-300/90' : 'text-rose-400/90'}`}>
+                            {c.mismatch_reason}
+                          </p>
                         )}
-                        <span className="text-emerald-400">· {Math.round(c.confidence_score * 100)}% verified</span>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => removeCert(c.id)}
+                        className="rounded p-1 text-zinc-400 hover:bg-white/10 hover:text-red-400"
+                        title="Remove certificate"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => removeCert(c.id)}
-                      className="rounded p-1 text-zinc-400 hover:bg-white/10 hover:text-red-400"
-                      title="Remove certificate"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

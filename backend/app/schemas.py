@@ -36,6 +36,14 @@ class CertificateEvidence(BaseModel):
     skills: List[str] = Field(default_factory=list)
     confidence_score: float = 0.8
     raw_text_snippet: Optional[str] = None
+    issuer_status: str = Field(default="parsed", description="'parsed', 'issuer_verified', 'issuer_mismatch', 'issuer_unreachable'")
+    issuer_record: Optional[Dict[str, Any]] = None
+    verification_timestamp: Optional[str] = None
+    evidence_hash: Optional[str] = None
+    extracted_pointers: List[str] = Field(default_factory=list)
+    mismatch_reason: Optional[str] = None
+    issuer_domain: Optional[str] = None
+    score_tier: int = Field(default=0, description="0 for unverified/mismatch, 4 for issuer_verified")
 
 class ClaimsDocument(BaseModel):
     candidate_name: str
