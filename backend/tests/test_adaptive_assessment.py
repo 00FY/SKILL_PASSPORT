@@ -307,11 +307,13 @@ def test_session_persistence_across_engine_reloads(tmp_path):
     session_id = s["session_id"]
     task1 = s["task"]
 
-    # Submit step 1 on engine 1
+    # Submit step 1 on engine 1 using the task's valid option
+    task_def = engine1._get_task_by_id("Python", task1.task_id)
+    correct_opt = task_def.get("correct_option", 0) if task_def else 0
     req1 = TaskSubmissionRequest(
         session_id=session_id,
         task_id=task1.task_id,
-        selected_option=1
+        selected_option=correct_opt
     )
     res1 = engine1.submit_step(req1)
     assert res1.passed is True

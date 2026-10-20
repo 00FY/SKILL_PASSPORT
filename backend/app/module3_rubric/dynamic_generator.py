@@ -4,6 +4,7 @@ import json
 import uuid
 import random
 import logging
+import time
 import httpx
 from typing import Dict, Any, List, Optional
 from ..schemas import StageType, DifficultyTier
@@ -144,15 +145,21 @@ class DynamicQuestionGenerator:
             "generationConfig": {"response_mime_type": "application/json"}
         }
 
-        try:
-            res = httpx.post(url, json=payload, headers={"x-goog-api-key": api_key}, timeout=25.0)
-            res.raise_for_status()
-            text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            data = json.loads(text)
-            return self._normalize_generated_task(data, skill, stage_type, difficulty)
-        except Exception as exc:
-            logger.warning("Gemini task generation failed, falling back to curated bank: %s", exc)
-            return None
+        for attempt in range(2):
+            try:
+                res = httpx.post(url, json=payload, headers={"x-goog-api-key": api_key}, timeout=25.0)
+                if res.status_code in (503, 429) and attempt == 0:
+                    time.sleep(1.2)
+                    continue
+                res.raise_for_status()
+                text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                data = json.loads(text)
+                return self._normalize_generated_task(data, skill, stage_type, difficulty)
+            except Exception as exc:
+                if attempt == 1:
+                    logger.warning("Gemini task generation failed, falling back to curated bank: %s", exc)
+                    return None
+        return None
 
     def _generate_via_openai(
         self,
@@ -213,7 +220,11 @@ class DynamicQuestionGenerator:
 
         repo_context = context.get("repo_context")
         if repo_context:
-            parts.append(f"GitHub Repository & Evidence Context: {repo_context}")
+            if isinstance(repo_context, dict):
+                repo_str = ", ".join(f"{k}: {v}" for k, v in repo_context.items())
+            else:
+                repo_str = str(repo_context)
+            parts.append(f"GitHub Repository & Evidence Context: {repo_str}")
 
         return "\n".join(parts)
 

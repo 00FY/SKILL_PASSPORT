@@ -3,7 +3,7 @@ import json
 import ast
 import uuid
 import concurrent.futures
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from ..schemas import (
     StageType, DifficultyTier, PublicTaskItem,
     TaskSubmissionRequest, StepEvaluationResult
@@ -107,7 +107,7 @@ class AdaptiveAssessmentEngine:
         initial_verdict: Optional[str] = None,
         candidate_name: Optional[str] = None,
         applied_role: Optional[str] = None,
-        repo_context: Optional[str] = None
+        repo_context: Optional[Union[str, Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         session_id = f"asmt_{uuid.uuid4().hex[:12]}"
 
