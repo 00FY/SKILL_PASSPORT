@@ -109,3 +109,56 @@ export interface AnalysisJob {
   passport: PassportDocument | null;
   error: string | null;
 }
+
+// --- Outlier-Style Adaptive Assessment Types ---
+export type StageType = 'comprehension' | 'debugging' | 'coding' | 'reasoning';
+export type DifficultyTier = 1 | 2 | 3;
+
+export interface PublicTaskItem {
+  task_id: string;
+  skill: string;
+  stage_type: StageType;
+  difficulty: DifficultyTier;
+  prompt: string;
+  starter_code?: string | null;
+  options?: string[] | null;
+  sample_tests?: string[] | null;
+}
+
+export interface TaskSubmissionRequest {
+  session_id: string;
+  task_id: string;
+  selected_option?: number | null;
+  submitted_code?: string | null;
+  reasoning_text?: string | null;
+}
+
+export interface TestCaseResult {
+  test_case: number;
+  passed: boolean;
+  expected?: any;
+  actual?: any;
+  error?: string;
+}
+
+export interface StepEvaluationResult {
+  task_id: string;
+  passed: boolean;
+  step_score: number;
+  difficulty_attempted: DifficultyTier;
+  next_difficulty?: DifficultyTier | null;
+  feedback: string;
+  test_results: TestCaseResult[];
+  rubric_hits: string[];
+  is_complete: boolean;
+  next_task?: PublicTaskItem | null;
+  final_grade?: string | null;
+  final_weighted_score?: number | null;
+  trajectory?: string | null;
+}
+
+export interface StartAssessmentResponse {
+  session_id: string;
+  task: PublicTaskItem;
+}
+

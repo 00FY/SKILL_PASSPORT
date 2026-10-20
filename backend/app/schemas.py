@@ -211,4 +211,56 @@ class ApplyQuizRequest(BaseModel):
     skill: str
     grade: str
     percentage: Optional[float] = None
+    trajectory: Optional[str] = None
+
+
+# --- Outlier-style Adaptive Assessment Schemas ---
+class StageType(str, Enum):
+    COMPREHENSION = "comprehension"  # Code reading / output prediction (MCQ or exact value)
+    DEBUGGING = "debugging"          # Fix a buggy snippet to pass hidden assertions
+    CODING = "coding"                # Write a function from scratch against unit tests
+    REASONING = "reasoning"          # Explain root cause / trade-offs (graded via deterministic rubric)
+
+class DifficultyTier(int, Enum):
+    FOUNDATIONAL = 1   # Weight multiplier: 1.0x
+    INTERMEDIATE = 2   # Weight multiplier: 1.5x
+    ADVANCED = 3       # Weight multiplier: 2.2x
+
+class PublicTaskItem(BaseModel):
+    task_id: str
+    skill: str
+    stage_type: StageType
+    difficulty: DifficultyTier
+    prompt: str
+    starter_code: Optional[str] = None
+    options: Optional[List[str]] = None          # Only for COMPREHENSION
+    sample_tests: Optional[List[str]] = None     # Visible test assertions for candidate
+
+class StartAssessmentRequest(BaseModel):
+    skill: str
+    passport_hash: Optional[str] = ""
+    initial_verdict: Optional[str] = None
+
+class TaskSubmissionRequest(BaseModel):
+    session_id: str
+    task_id: str
+    selected_option: Optional[int] = None        # For COMPREHENSION
+    submitted_code: Optional[str] = None         # For DEBUGGING / CODING
+    reasoning_text: Optional[str] = None         # For REASONING
+
+class StepEvaluationResult(BaseModel):
+    task_id: str
+    passed: bool
+    step_score: float                            # 0.0 to 1.0
+    difficulty_attempted: DifficultyTier
+    next_difficulty: Optional[DifficultyTier] = None
+    feedback: str
+    test_results: List[Dict[str, Any]] = Field(default_factory=list)
+    rubric_hits: List[str] = Field(default_factory=list)
+    is_complete: bool = False
+    next_task: Optional[PublicTaskItem] = None
+    final_grade: Optional[str] = None            # A, B, C, D, E when complete
+    final_weighted_score: Optional[float] = None # 0 to 100
+    trajectory: Optional[str] = None             # E.g. T2(Pass)->T3(Pass)->T3(Pass)->T3(Pass)
+
 

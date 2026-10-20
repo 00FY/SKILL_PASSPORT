@@ -67,10 +67,40 @@ class DeterministicScoringEngine:
         return bonus, reasons
 
     @staticmethod
-    def calculate_skill_points(evidence_score: int, grade: str, consistency_bonus: int = 0) -> int:
+    def calculate_skill_points(evidence_score: int, grade: str, consistency_bonus: int = 0, verdict: Optional[str] = None) -> int:
+        if verdict == "CONTRADICTED":
+            return CONTRADICTED_POINTS
         grade_weight = GRADE_WEIGHTS.get(grade.upper(), 6)
         points = evidence_score * grade_weight + consistency_bonus
         return min(100, max(0, points))
+
+    @staticmethod
+    def starting_difficulty_for_verdict(verdict: Optional[str]) -> int:
+        """
+        Repo-Seeded Starting Difficulty:
+        If CLAIMED_ONLY, start at Tier 1 (Foundational).
+        If VERIFIED or PARTIALLY_SUPPORTED, start at Tier 2 (Intermediate).
+        """
+        if verdict == "CLAIMED_ONLY":
+            return 1
+        return 2
+
+    @staticmethod
+    def adaptive_grade_from_performance(pct: float, max_tier_passed: int = 1) -> str:
+        """
+        Maps continuous adaptive percentage and difficulty ceiling reached into Grade (A-E).
+        Grade A strictly requires passing at least one Tier 3 (Advanced) task.
+        """
+        if pct >= 85.0 and max_tier_passed >= 3:
+            return "A"
+        elif pct >= 70.0 and max_tier_passed >= 2:
+            return "B"
+        elif pct >= 55.0:
+            return "C"
+        elif pct >= 40.0:
+            return "D"
+        else:
+            return "E"
 
     @staticmethod
     def grade_from_percentage(pct: float) -> str:

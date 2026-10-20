@@ -1,5 +1,6 @@
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Depends, Request
@@ -9,7 +10,8 @@ from pydantic import BaseModel, Field
 from .schemas import (
     ClaimsDocument, EvidenceDocument, PassportDocument,
     SimulationRequest, SimulationResult, QuizResult, QuizSubmission,
-    ApplyQuizRequest, AuditStep
+    ApplyQuizRequest, AuditStep, RunAuditLog, StartAssessmentRequest,
+    TaskSubmissionRequest, StepEvaluationResult, VerdictEnum
 )
 from .skills import normalize_skill
 from .jobs import JobManager, JobFailure, QueueFullError
@@ -20,7 +22,8 @@ from .module2_harvester import EvidenceHarvesterService, RepoSourceError, RepoAc
 from .module2_harvester.repo_source import local_repos_allowed
 from .module2_harvester.harvester_service import MAX_REPOS
 from .module3_rubric import (
-    PassportService, QuestionBankEngine, CryptoSigner, GRADE_WEIGHTS
+    PassportService, QuestionBankEngine, CryptoSigner, GRADE_WEIGHTS,
+    AdaptiveAssessmentEngine, CONTRADICTED_POINTS
 )
 from .data.demo_personas import (
     PRIYA_CLAIMS, PRIYA_EVIDENCE,
@@ -54,6 +57,7 @@ pdf_parser = PDFParser()
 harvester = EvidenceHarvesterService()
 passport_svc = PassportService()
 quiz_engine = QuestionBankEngine()
+adaptive_engine = AdaptiveAssessmentEngine()
 jobs = JobManager()
 # Each analysis clones and blames repositories, so they are limited per client address
 analysis_limiter = RateLimiter.from_env("SKILL_PASSPORT_RATE_LIMIT", "20/hour")
@@ -242,7 +246,38 @@ def simulate_what_if(req: SimulationRequest):
     return passport_svc.simulate_what_if(req)
 
 
-# --- Challenge Quiz Engine ---
+# --- Outlier-Style Adaptive Technical Assessment Engine ---
+@app.post("/api/assessment/start")
+def start_assessment(req: StartAssessmentRequest):
+    try:
+        return adaptive_engine.start_session(
+            skill=req.skill,
+            passport_hash=req.passport_hash or "",
+            initial_verdict=req.initial_verdict
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/assessment/start/{skill}")
+def start_assessment_get(skill: str, initial_verdict: Optional[str] = None):
+    try:
+        return adaptive_engine.start_session(skill=skill, initial_verdict=initial_verdict)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/assessment/submit-step", response_model=StepEvaluationResult)
+def submit_assessment_step(req: TaskSubmissionRequest):
+    try:
+        return adaptive_engine.submit_step(req)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Assessment step evaluation failed: {e}")
+
+
+# --- Challenge Quiz Engine (Backward-Compatible) ---
 @app.get("/api/quiz/{skill}")
 def get_quiz(skill: str):
     # Answers and explanations stay on the server until the quiz is submitted
@@ -265,6 +300,7 @@ def apply_quiz_grade(req: ApplyQuizRequest):
     Applies the completed skill challenge test grade to a passport, recalculating
     the skill points via: Final Points = min(100, max(0, Evidence Score * Grade Weight + Consistency Bonus))
     recalculating the overall audit score, appending the audit trace, and re-signing the passport.
+    An assessment grade can boost CLAIMED_ONLY or PARTIALLY_SUPPORTED points, but can never override CONTRADICTED.
     """
     passport = req.passport
     target_skill = normalize_skill(req.skill).lower()
@@ -282,14 +318,35 @@ def apply_quiz_grade(req: ApplyQuizRequest):
         matches = re.findall(r"\+(\d+)\s*pts", skill_item.reasoning)
         consistency_bonus = sum(int(m) for m in matches)
 
-    skill_item.final_points = min(100, max(0, skill_item.evidence_score * grade_weight + consistency_bonus))
+    # Security rule from verifier.py: an assessment grade can boost CLAIMED_ONLY or
+    # PARTIALLY_SUPPORTED points, but can NEVER override a CONTRADICTED verdict
+    if skill_item.verdict == VerdictEnum.CONTRADICTED:
+        skill_item.final_points = CONTRADICTED_POINTS
+    else:
+        skill_item.final_points = min(100, max(0, skill_item.evidence_score * grade_weight + consistency_bonus))
 
     # Recalculate overall audit score
     passport.overall_score = round(sum(s.final_points for s in passport.skills) / max(1, len(passport.skills)))
 
     # Record in audit log
-    if passport.audit_log:
-        pct_text = f" ({req.percentage}%)" if req.percentage is not None else ""
+    if passport.audit_log is None:
+        passport.audit_log = RunAuditLog(
+            audit_id=f"audit_{uuid.uuid4().hex[:10]}",
+            candidate_name=passport.candidate_name,
+            traces=[],
+            generated_at=datetime.now(timezone.utc).isoformat()
+        )
+
+    pct_text = f" ({req.percentage}%)" if req.percentage is not None else ""
+    if req.trajectory:
+        passport.audit_log.traces.append(AuditStep(
+            step="ADAPTIVE_ASSESSMENT_COMPLETED",
+            target=skill_item.name,
+            rule_applied=f"Trajectory: {req.trajectory} | Weighted: {req.percentage}%",
+            verdict_reached=f"Grade {grade} applied; HMAC-SHA256 passport re-signed",
+            timestamp=datetime.now(timezone.utc).isoformat()
+        ))
+    else:
         passport.audit_log.traces.append(AuditStep(
             step="CHALLENGE_TEST_COMPLETED",
             target=skill_item.name,
