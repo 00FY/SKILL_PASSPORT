@@ -3,10 +3,10 @@ The holes a judge could demonstrate live: certificates the server never saw, som
 requests with no evidence, and template decorations flagged as hidden-text attacks.
 """
 import io
+import zipfile
+from xml.sax.saxutils import escape
 
 import pytest
-from docx import Document
-from docx.shared import Pt, RGBColor
 from fastapi.testclient import TestClient
 
 from app.main import app, cert_store
@@ -109,15 +109,18 @@ def test_resume_alone_is_still_analysed():
 # --- Hidden-text detector -------------------------------------------------------------------------
 
 def _docx_with_run(text, tiny=True):
-    d = Document()
-    d.add_paragraph("Soham Kadam - Software Engineer")
-    run = d.add_paragraph().add_run(text)
-    if tiny:
-        run.font.size = Pt(1)
-    else:
-        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    """A minimal .docx (no extra libraries): one visible line, then `text` in 1pt or white font."""
+    w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    style = '<w:sz w:val="2"/>' if tiny else '<w:color w:val="FFFFFF"/>'
+    document = (
+        f'<w:document xmlns:w="{w}"><w:body>'
+        '<w:p><w:r><w:t>Soham Kadam - Software Engineer</w:t></w:r></w:p>'
+        f'<w:p><w:r><w:rPr>{style}</w:rPr><w:t xml:space="preserve">{escape(text)}</w:t></w:r></w:p>'
+        '</w:body></w:document>'
+    )
     buf = io.BytesIO()
-    d.save(buf)
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/document.xml", document)
     return PDFParser().parse_file("resume.docx", buf.getvalue()).text
 
 
