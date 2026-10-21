@@ -72,3 +72,85 @@ def test_username_only_analysis_fails_clearly_when_repos_cant_be_listed(monkeypa
     detail = res.json()["detail"]
     assert "Couldn't list @someone's repositories" in detail
     assert "Paste the repository URLs" in detail and "GITHUB_TOKEN" in detail
+
+
+@pytest.mark.parametrize("status, expected", [
+    (401, "rejected the configured API token"),
+    (403, "denied API access"),
+    (404, "private"),
+    (500, "unavailable"),
+    (502, "unavailable"),
+    (503, "unavailable"),
+    (429, "rate limit"),
+])
+def test_discovery_explains_github_failures(monkeypatch, status, expected):
+    response = FakeResponse(status)
+    monkeypatch.setattr(github_api.httpx, "get", lambda *a, **kw: response)
+    monkeypatch.setenv("SKILL_PASSPORT_GITHUB_API", "1")
+    res = client.post("/api/discover-repos", json={"username": "dev"})
+    assert res.status_code == 200
+    assert res.json()["repo_urls"] == []
+    assert expected in " ".join(res.json()["warnings"])
+
+
+def test_discovery_explains_network_outage(monkeypatch):
+    def offline(*a, **kw):
+        raise github_api.httpx.ConnectError("Connection failed")
+    monkeypatch.setattr(github_api.httpx, "get", offline)
+    monkeypatch.setenv("SKILL_PASSPORT_GITHUB_API", "1")
+    result = client.post("/api/discover-repos", json={"username": "dev"}).json()
+    assert "cannot be reached" in result["warnings"][0]
+    assert result["repo_urls"] == []
+
+
+def test_discovery_warns_when_no_public_repositories_exist(monkeypatch):
+    monkeypatch.setattr(github_api.httpx, "get", lambda url, **kw: FakeResponse(
+        200, [] if url.endswith("/repos") else {"login": "dev", "public_repos": 0}
+    ))
+    monkeypatch.setenv("SKILL_PASSPORT_GITHUB_API", "1")
+    result = client.post("/api/discover-repos", json={"username": "dev"}).json()
+    assert "No public, non-fork repositories" in result["warnings"][0]
+
+
+def test_cached_valid_token_cannot_hide_invalid_token(monkeypatch):
+    def fake(url, headers=None, **kw):
+        return (FakeResponse(200, {"login": "dev"})
+                if headers.get("Authorization") == "Bearer valid-token"
+                else FakeResponse(401))
+    monkeypatch.setattr(github_api.httpx, "get", fake)
+    assert GitHubClient(token="valid-token", enabled=True).user_profile("dev")
+    problems = []
+    assert GitHubClient(token="bad-token", enabled=True).user_profile("dev", problems) is None
+    assert problems == ["HTTP 401"]
+
+
+def test_profile_warning_survives_successful_direct_repo_analysis(monkeypatch):
+    import app.main as main
+    from app.schemas import EvidenceDocument, QualitySignals
+
+    monkeypatch.setattr(github_api.httpx, "get", lambda *a, **kw: FakeResponse(401))
+    monkeypatch.setenv("SKILL_PASSPORT_GITHUB_API", "1")
+    monkeypatch.setattr(main.harvester, "harvest_many", lambda *a, **kw: EvidenceDocument(
+        repo_url="https://github.com/dev/app",
+        signals=QualitySignals(commit_count=3),
+    ))
+    passport = main._run_analysis(main.AnalyzeRequest(
+        github_username="dev", repo_urls=["https://github.com/dev/app"], resume_text="Dev Engineer\nPython"
+    ))
+    assert any("rejected the configured API token" in warning for warning in passport.warnings)
+
+
+@pytest.mark.parametrize("stderr, expected", [
+    ("remote: Repository not found.", "doesn't exist or is private"),
+    ("fatal: could not read Username: terminal prompts disabled", "doesn't exist or is private"),
+    ("fatal: unable to access https://github.com/dev/app: error 503", "unavailable"),
+    ("fatal: Could not resolve host: github.com", "cannot be reached"),
+])
+def test_clone_failure_has_actionable_error(monkeypatch, tmp_path, stderr, expected):
+    from types import SimpleNamespace
+    from app.module2_harvester import repo_source
+
+    monkeypatch.setattr(repo_source.shutil, "disk_usage", lambda _: SimpleNamespace(free=10**12))
+    monkeypatch.setattr(repo_source.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=1, stderr=stderr))
+    with pytest.raises(repo_source.RepoAccessError, match=expected):
+        repo_source.clone_repo(repo_source.parse_repo_source("https://github.com/dev/app"), str(tmp_path))

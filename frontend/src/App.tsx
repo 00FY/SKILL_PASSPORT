@@ -8,6 +8,7 @@ import { QuizModal } from './components/QuizModal';
 import { DefendModal } from './components/DefendModal';
 import { UploadModal } from './components/UploadModal';
 import { PytestGeneratorModal } from './components/PytestGeneratorModal';
+import { AnalysisAlert, AnalysisNotice } from './components/AnalysisAlert';
 import { PassportDocument, SkillPassportItem } from './lib/types';
 import { request } from './lib/api';
 
@@ -22,6 +23,7 @@ export const App: React.FC = () => {
   const [defendSkill, setDefendSkill] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [pytestOpen, setPytestOpen] = useState(false);
+  const [analysisNotice, setAnalysisNotice] = useState<AnalysisNotice | null>(null);
 
   const loadDemo = async (key: string) => {
     setDemoKey(key);
@@ -83,10 +85,19 @@ export const App: React.FC = () => {
       />
       <UploadModal
         isOpen={uploadOpen}
+        onAlert={setAnalysisNotice}
         onClose={() => setUploadOpen(false)}
-        onCustomVerified={p => { setPassport(p); setDemoKey('custom'); setView('recruiter'); }}
+        onCustomVerified={p => {
+          setPassport(p); setDemoKey('custom'); setView('recruiter');
+          const problems = (p.warnings || []).filter(w => /github|could not clone|cloning .*timed out/i.test(w));
+          if (problems.length) setAnalysisNotice({
+            title: 'Analysis completed with GitHub warnings',
+            messages: [...new Set(problems)],
+          });
+        }}
       />
       <PytestGeneratorModal isOpen={pytestOpen} onClose={() => setPytestOpen(false)} />
+      <AnalysisAlert notice={analysisNotice} onClose={() => setAnalysisNotice(null)} />
     </div>
   );
 };

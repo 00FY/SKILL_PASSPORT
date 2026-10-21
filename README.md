@@ -142,6 +142,7 @@ The **Demo** menu in the top bar loads pre-built evidence documents from `backen
 ## ✨ Key Features
 
 ### 📄 Analyse any candidate
+* **GitHub failure alerts:** a popup explains outages, rejected API tokens, rate limits and private or incorrect repository URLs. When some repositories or GitHub checks are unavailable, successful analysis continues with a warning popup and notes in the passport. If every repository fails, the app shows the error without issuing a passport.
 * **Resume upload:** PDF, DOCX or TXT (up to 5 MB). Text is extracted for review before analysis. Hidden DOCX runs (vanish, white or micro font) and sub-2pt PDF text are surfaced to the injection guard. Scanned image-only PDFs produce a warning, because OCR isn't supported.
 * **Broad skill catalog:** about 65 skills with careful aliasing ("Java" ≠ "JavaScript"; a repo name inside a URL is not a claim; the word "testing" alone is not a pytest claim). Set `GEMINI_API_KEY` or `OPENAI_API_KEY` to let an LLM add skills outside the catalog. LLM output is normalised and can never set scores or security flags.
 * **Git identities:** authorship is matched on emails, usernames (including GitHub `noreply` addresses) or full names, never by substring. The repository owner's username is included automatically. When nothing matches, the passport lists the commit authors it found so the identity can be fixed.

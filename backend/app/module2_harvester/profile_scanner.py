@@ -2,7 +2,7 @@ import re
 import logging
 from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
-from .github_api import GitHubClient, RATE_LIMITED
+from .github_api import GitHubClient, github_problem_message
 from .harvester_service import MAX_REPOS
 
 logger = logging.getLogger(__name__)
@@ -63,10 +63,15 @@ class ProfileScanner:
         repos_raw = self.github.user_repos(username, limit=max_repos, problems=problems)
 
         warnings: List[str] = []
-        if RATE_LIMITED in problems:
-            warnings.append("GitHub's API limit was reached (60 requests an hour without a token).")
-        elif any("HTTP" in p or "network" in p for p in problems):
-            warnings.append(f"GitHub API returned notices: {', '.join(set(problems))}")
+        if not self.github.enabled:
+            problems.append("disabled")
+        if problems:
+            warnings.append(github_problem_message(problems))
+        elif not repos_raw:
+            warnings.append(
+                f"No public, non-fork repositories were found for @{username}. "
+                "Check the username, make a repository public, or enter a public repository URL directly."
+            )
 
         repos_meta: List[RepoMetaItem] = []
         repo_urls: List[str] = []

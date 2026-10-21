@@ -646,6 +646,26 @@ def test_github_rate_limit_becomes_a_warning(username_repo):
     assert any("rate limit" in w and "GITHUB_TOKEN" in w for w in doc.warnings)
 
 
+def test_deployment_api_failure_is_reported_even_when_other_checks_succeed(username_repo):
+    from app.module2_harvester.repo_source import RepoRef
+
+    class DeploymentUnavailable(GitHubClient):
+        def _get(self, path, params=None, problems=None):
+            if path.endswith("/deployments"):
+                if problems is not None:
+                    problems.append("HTTP 503")
+                return None
+            if path.endswith("/pulls"):
+                return []
+            return {"fork": False, "homepage": ""}
+
+    svc = EvidenceHarvesterService(github_client=DeploymentUnavailable(enabled=True))
+    ref = RepoRef(url="https://github.com/sohamk234/demo", host="github.com", owner="sohamk234", name="demo")
+    doc = svc._analyze_path(username_repo, ref, "Soham Kadam", ["sohamk234"])
+    assert doc.signals.commit_count > 0
+    assert any("unavailable" in warning and "checks were skipped" in warning for warning in doc.warnings)
+
+
 # --- Skill challenge integrity -----------------------------------------------------------------
 
 def _earn(skill, correct=True, passport=None):

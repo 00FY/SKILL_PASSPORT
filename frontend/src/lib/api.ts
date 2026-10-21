@@ -47,6 +47,7 @@ export async function waitForJob<T extends { status: string; message: string; er
     if (job.status === 'done') return job;
     if (job.status === 'failed') throw new ApiError(job.error || 'Analysis failed.');
     onProgress(job.message);
+    await sleep(intervalMs);
   }
 }
 

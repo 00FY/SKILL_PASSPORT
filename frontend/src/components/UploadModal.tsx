@@ -2,11 +2,13 @@ import React, { useRef, useState } from 'react';
 import { AlertTriangle, Award, Check, Code2, FileText, Github, Loader2, Sparkles, Trash2, X } from 'lucide-react';
 import { AnalysisJob, CertificateEvidence, PassportDocument } from '../lib/types';
 import { ApiError, discoverRepos, postJson, request, uploadCert, waitForJob } from '../lib/api';
+import { AnalysisNotice } from './AnalysisAlert';
 
 interface UploadModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCustomVerified: (passport: PassportDocument) => void;
+  onAlert: (notice: AnalysisNotice) => void;
 }
 
 interface ParsedResume {
@@ -31,7 +33,7 @@ const namesMatch = (a: string, b: string) => {
   return short.every(t => long.some(u => u === t || (t.length === 1 && u.startsWith(t)) || (u.length === 1 && t.startsWith(u))));
 };
 
-export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCustomVerified }) => {
+export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCustomVerified, onAlert }) => {
   const [githubUsername, setGithubUsername] = useState('');
   const [resumeText, setResumeText] = useState('');
   const [repoUrls, setRepoUrls] = useState('');
@@ -55,7 +57,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
     try {
       await task();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Something went wrong.');
+      const message = e instanceof Error ? e.message : 'Something went wrong. Please try again.';
+      setError(message);
+      onAlert({ title: 'Analysis could not finish', messages: [message] });
     } finally {
       setBusyMessage('');
     }
@@ -96,6 +100,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
       return;
     }
     setError('');
+    setNotices([]);
     setDiscovering(true);
     try {
       const data = await discoverRepos(githubUsername.trim());
@@ -110,9 +115,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
           ...data.warnings,
           'Paste your repository URLs into "Repositories to analyze" instead: the analysis clones them directly and does not need the GitHub API.',
         ]);
+        onAlert({ title: 'GitHub repository discovery needs attention', messages: data.warnings });
       }
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to discover GitHub profile.');
+      const message = e instanceof Error ? e.message : 'Failed to discover GitHub profile. Please try again.';
+      setError(message);
+      onAlert({ title: 'GitHub repository discovery failed', messages: [message] });
     } finally {
       setDiscovering(false);
     }

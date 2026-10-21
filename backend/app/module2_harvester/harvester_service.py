@@ -10,7 +10,7 @@ from .git_crawler import GitBlameAnalyzer
 from .ast_analyzer import ASTAnalyzer
 from .test_detector import TestDetector
 from .fork_detector import ForkAndTemplateDetector
-from .github_api import GitHubClient, RATE_LIMITED
+from .github_api import GitHubClient, github_problem_message
 from .function_picker import pick_functions
 from .repo_source import (
     RepoRef, RepoSourceError, RepoAccessError, parse_repo_source, clone_repo, local_repos_allowed
@@ -193,16 +193,12 @@ class EvidenceHarvesterService:
             warnings.append(f"{ref.url} is large: authorship was measured on the first {blame_res['files_blamed']} files only.")
         if blame_res["is_shallow"]:
             warnings.append(f"{ref.url} has truncated history, so the single-commit dump check was skipped.")
-        if ref.is_github and self.github.enabled and (host_meta is None or merged_prs is None):
-            skipped = "fork, deployment and pull request checks" if host_meta is None else "the pull request check"
-            if RATE_LIMITED in api_problems:
-                warnings.append(
-                    f"GitHub API rate limit reached, so {skipped} were skipped for {ref.url}. "
-                    "Set GITHUB_TOKEN on the server to raise the limit."
-                )
-            else:
-                reason = ", ".join(sorted(set(api_problems))) or "unavailable"
-                warnings.append(f"GitHub API {reason}: {skipped} were skipped for {ref.url}.")
+        if ref.is_github and self.github.enabled and (api_problems or host_meta is None or merged_prs is None):
+            warnings.append(
+                f"{github_problem_message(api_problems)} "
+                f"Some GitHub checks were skipped for {ref.url}. "
+                "Available git history was still analysed."
+            )
 
         return EvidenceDocument(
             repo_url=ref.url,

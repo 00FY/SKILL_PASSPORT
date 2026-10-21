@@ -1,4 +1,5 @@
 import logging
+import hashlib
 import os
 import threading
 import time
@@ -10,6 +11,24 @@ CACHE_TTL_S = 15 * 60
 MAX_CACHE_ENTRIES = 2000
 
 logger = logging.getLogger(__name__)
+
+
+def github_problem_message(problems: Iterable[str]) -> str:
+    """Explain missing GitHub evidence without confusing it with a candidate's skill."""
+    issues = set(problems)
+    if "HTTP 401" in issues:
+        return "GitHub rejected the configured API token. Ask the server administrator to update GITHUB_TOKEN and try again."
+    if RATE_LIMITED in issues:
+        return "GitHub API rate limit reached. Wait for the limit to reset, or ask the server administrator to configure GITHUB_TOKEN."
+    if "HTTP 403" in issues:
+        return "GitHub denied API access. Ask the server administrator to check GITHUB_TOKEN permissions and try again."
+    if "HTTP 404" in issues:
+        return "GitHub could not find the profile or repository, or it is private. Check the username or repository URL and use a public repository."
+    if "network error" in issues or any(p.startswith("HTTP 5") for p in issues):
+        return "GitHub is unavailable or cannot be reached from the server. Check the connection and try again later."
+    if "disabled" in issues:
+        return "GitHub API access is disabled on this server. Enter public repository URLs directly, or ask the administrator to enable it."
+    return "GitHub returned an unexpected response. Some checks could not finish. Try again later."
 
 
 class GitHubClient:
@@ -35,7 +54,8 @@ class GitHubClient:
         """GET a REST path. Failures return None and, if `problems` is given, append why."""
         if not self.enabled:
             return None
-        auth = "token" if self.token else "anonymous"
+        # A response fetched using a valid token must not mask a different, invalid token.
+        auth = hashlib.sha256(self.token.encode()).hexdigest() if self.token else "anonymous"
         key = (auth, path, repr(sorted((params or {}).items())))
         now = time.time()
         with GitHubClient._lock:
@@ -53,7 +73,7 @@ class GitHubClient:
             res = httpx.get(f"https://api.github.com{path}", headers=headers, params=params, timeout=self.timeout)
             if res.status_code != 200:
                 logger.info("GitHub API %s returned %s", path, res.status_code)
-                limited = res.status_code in (403, 429) and (
+                limited = res.status_code == 429 or res.status_code == 403 and (
                     res.headers.get("x-ratelimit-remaining") == "0" or "rate limit" in res.text.lower()
                 )
                 if limited:

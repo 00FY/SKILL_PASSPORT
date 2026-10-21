@@ -119,7 +119,7 @@ def clone_repo(ref: RepoRef, dest: str) -> None:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         shutil.rmtree(dest, ignore_errors=True)
-        raise RepoAccessError(f"Cloning {ref.url} took longer than {timeout}s. Try a smaller repository.") from exc
+        raise RepoAccessError(f"Cloning {ref.url} timed out after {timeout}s. The code host may be unavailable or the repository may be too large. Try again later or use a smaller public repository.") from exc
     except FileNotFoundError as exc:
         raise RepoAccessError("git is not installed on the server.") from exc
 
@@ -127,8 +127,8 @@ def clone_repo(ref: RepoRef, dest: str) -> None:
         stderr = (proc.stderr or "").lower()
         if any(s in stderr for s in ("not found", "could not read username", "authentication", "terminal prompts disabled", "403")):
             reason = "the repository doesn't exist or is private. Only public repositories can be analysed - make it public, or use the Skill Challenge quiz instead."
-        elif "could not resolve host" in stderr or "unable to access" in stderr:
-            reason = "the server couldn't reach the code host (network problem)."
+        elif any(s in stderr for s in ("could not resolve host", "unable to access", "connection", "502", "503", "504")):
+            reason = "the code host is unavailable or cannot be reached from the server. Check the connection and try again later."
         else:
             reason = (proc.stderr or "unknown git error").strip().splitlines()[-1][:200]
         raise RepoAccessError(f"Could not clone {ref.url}: {reason}")

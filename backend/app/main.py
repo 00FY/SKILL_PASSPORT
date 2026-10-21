@@ -309,7 +309,10 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
         raise JobFailure(str(exc), 422)
     if auto_detected:
         evidence_doc.warnings.insert(0, f"No repository was entered; analysed repositories linked in the resume: {', '.join(repos)}.")
-    evidence_doc.warnings = certificate_notes + evidence_doc.warnings
+    profile_notes = list(profile_info.warnings) if profile_info else []
+    if profile_problem and profile_problem not in profile_notes:
+        profile_notes.append(f"GitHub profile lookup: {profile_problem}")
+    evidence_doc.warnings = list(dict.fromkeys(certificate_notes + profile_notes + evidence_doc.warnings))
 
     # 3. Module 3: 4-State Rubric Engine & Cryptographic Signer
     report("Scoring claims and signing the passport")
