@@ -52,24 +52,16 @@ def test_verify_signature_endpoint():
     assert tamper_data["valid"] is False
     assert "Signature verification failed" in tamper_data["reason"]
 
-def test_quiz_and_submission():
-    res = client.get("/api/quiz/Python")
-    assert res.status_code == 200
-    questions = res.json()["questions"]
-    assert len(questions) == 15
-
-    # Answers are never sent to the browser before submission
-    assert all("correct_index" not in q and "explanation" not in q for q in questions)
-
-    # Submit quiz with the server-side answer key
+def test_question_bank_grades_on_the_server():
+    from app.module3_rubric import QuestionBankEngine
     from app.module3_rubric.question_bank import SAMPLE_QUIZZES
-    answers = {q.id: q.correct_index for q in SAMPLE_QUIZZES["Python"]}
-    sub_res = client.post("/api/quiz/submit", json={"skill": "Python", "answers": answers})
-    assert sub_res.status_code == 200
-    result = sub_res.json()
-    assert result["grade"] == "A"
-    assert result["grade_weight"] == 10
-    assert len(result["review"]) == 15 and all("explanation" in r for r in result["review"])
+    bank = QuestionBankEngine()
+    questions = bank.public_questions("Python")
+    assert len(questions) == 15
+    # The public form never carries the answers
+    assert all("correct_index" not in q.model_dump() and "explanation" not in q.model_dump() for q in questions)
+    result = bank.evaluate_quiz("Python", {q.id: q.correct_index for q in SAMPLE_QUIZZES["Python"]})
+    assert result.grade == "A" and result.grade_weight == 10
 
 def test_simulate_what_if_endpoint():
     priya_res = client.get("/api/demo/priya")

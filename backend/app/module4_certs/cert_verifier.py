@@ -71,6 +71,10 @@ def decide(
             title_ok = True
 
     if name_ok and title_ok:
+        # The document matches the issuer's record; it must also be the candidate's own certificate
+        if candidate_name and not name_match(record.recipient_name, candidate_name):
+            return "unverified", (f"Official issuer record lists a different recipient ('{record.recipient_name}') "
+                                  f"than the candidate ('{candidate_name}')")
         return "verified", None
 
     if not name_ok:
@@ -100,7 +104,7 @@ class CertificateVerifierService:
         contents: bytes,
         candidate_name: Optional[str] = None
     ) -> CertificateEvidence:
-        cert_id = f"cert-{uuid.uuid4().hex[:8]}"
+        cert_id = f"cert-{uuid.uuid4().hex}"
 
         # 1. Extract details from file
         extracted = self.extractor.extract(filename, contents, candidate_name)

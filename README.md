@@ -161,7 +161,7 @@ One screen answering "can I trust this resume?":
 * **Next steps:** the learning plan, with each step's impact computed by re-running the scoring formulas.
 * **What if…:** toggle improvements (tests, deployment, sustained commits) and see their combined effect. The backend calculates it.
 * **Starter pytest file:** a generic FastAPI test file to adapt.
-* **Skill challenges:** a 15-question quiz (Python, Docker) that can be opened from a skill that isn't verified. The grade is shown only and isn't added to the signed passport.
+* **Skill assessment:** an adaptive 4-stage assessment (comprehension, debugging, coding, reasoning) graded on the server. It's tied to the signed passport, limited to 2 attempts per skill, and its grade is applied to the passport and re-signed.
 
 ### 🛡️ Defend Your Code (optional)
 A general quiz shows someone *knows* Python; it can't show they *wrote* the code credited to them. Defend Your Code asks about the candidate's own functions:
@@ -245,7 +245,8 @@ Open [http://localhost:3000](http://localhost:3000), then click **Analyze a resu
 | `POST /api/analyze` | The same analysis in a single request, for scripts (can take minutes). |
 | `POST /api/verify-signature` | Check that a passport JSON hasn't been altered. |
 | `POST /api/simulate` | What-if recalculation (not signed). |
-| `GET /api/quiz/{skill}`, `POST /api/quiz/submit` | Skill challenges. Answers are revealed only after submission. |
+| `POST /api/assessment/start` → `POST /api/assessment/submit-step` → `POST /api/quiz/apply` | Adaptive skill assessment for a signed passport; the finished grade is applied and the passport re-signed. |
+| `POST /api/upload-cert` | Parse and verify a certificate. The result is kept on the server; an analysis accepts certificates only by the id returned here. |
 | `POST /api/defend/start` → `POST /api/defend/answer` → `POST /api/defend/apply` | Defend Your Code: start for a signed passport, answer one question at a time, apply the result (re-signed). |
 | `GET /api/demo/{priya\|alex\|jordan\|redteam}` | Demo passports, signed with `evidence_source: "demo"`. |
 
@@ -272,7 +273,8 @@ PYTHONPATH=backend pytest tests backend/tests -v
 * The quiz bank currently covers Python and Docker only.
 * A repository's homepage or deployments count as a deployment signal; liveness isn't checked.
 * Background jobs and rate-limit counters live in memory: they reset on restart and aren't shared between server processes. Use one process, or put the limits in your reverse proxy.
-* Quiz grades are shown to the candidate but aren't added to the signed passport.
+* Uploaded certificates, assessment attempts and Defend Your Code questions are kept in server memory: after a restart, upload certificates again and re-run the analysis.
+* A certificate the issuer confirms counts only for the person it was issued to: the issuer's recipient name must match the candidate's name (entered, from the resume, or from the GitHub profile; a username alone isn't enough).
 * Only the 100 most recent closed pull requests are checked for merged PRs.
 * Defend Your Code only runs Python ("what does this return?" questions) and only functions that need nothing beyond the standard library; other code gets the hidden-line and function-name questions. Brace-language functions are found by patterns, not a full parser, so unusual syntax can be missed. Questions live in server memory: after a restart, re-run the analysis to offer them again.
 * Very large repositories are analysed within the blame time budget, so authorship may be measured on a subset of files (flagged in the passport warnings).

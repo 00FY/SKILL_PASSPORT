@@ -44,6 +44,18 @@ HIDDEN_STYLE_PATTERNS = [
     (r"(?i)(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(\.0+)?\b)", "CSS_HIDDEN_PAYLOAD"),
 ]
 
+# Text inside a hidden-styled span counts as an attack only if it carries words. Template decorations in
+# tiny or white text (dividers, bullets, "Page 1") are common in honest resumes and are left alone.
+MIN_HIDDEN_WORDS = 2
+MIN_HIDDEN_LETTERS = 8
+SPAN_BODY_RE = re.compile(r"\s*>(?P<body>.*?)<\s*/\s*span\s*>", re.S | re.I)
+
+
+def _hidden_body_is_decorative(body: str) -> bool:
+    words = re.findall(r"[^\W\d_]{2,}", body.replace("[MICRO_FONT:", " "))
+    return len(words) < MIN_HIDDEN_WORDS or sum(len(w) for w in words) < MIN_HIDDEN_LETTERS
+
+
 STYLE_CONTEXT_PATTERNS = [
     r"""(?is)style\s*=\s*(["'])(?P<css>.*?)\1""",
     r"""(?is)<\s*style[^>]*>(?P<css>.*?)<\s*/\s*style\s*>""",
@@ -100,6 +112,9 @@ class PromptInjectionDefense:
                 css = m.group("css")
                 hits = [(flag_type, hm.group(0)) for pattern, flag_type in HIDDEN_STYLE_PATTERNS for hm in [re.search(pattern, css)] if hm]
                 if not hits:
+                    continue
+                body = SPAN_BODY_RE.match(cleaned_text, m.end())
+                if body and _hidden_body_is_decorative(body.group("body")):
                     continue
                 for flag_type, snippet in hits:
                     flags.append(
