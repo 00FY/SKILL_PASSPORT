@@ -2,7 +2,7 @@ import re
 import json
 import hashlib
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, List, Tuple
 from pydantic import BaseModel, Field
 
 from .allowlist import safe_fetch_issuer_page
@@ -20,6 +20,59 @@ class IssuerRecord(BaseModel):
     is_valid: bool = True
     error_message: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+COURSERA_DATE_RE = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b",
+                              re.IGNORECASE)
+# The line after the course title: "has successfully completed", "an online non-credit course authorized by ...",
+# "an online specialization authorized by ...", "... offered through Coursera"
+COURSERA_MARKER_RE = re.compile(
+    r"has successfully completed|authorized by|offered through coursera|^an online\b|^a(?:n)?\s+(?:professional|guided)",
+    re.IGNORECASE)
+NOT_A_NAME_WORDS = {"coursera", "certificate", "course", "university", "specialization", "verify", "completed",
+                    "online", "authorized", "professional", "instructor", "director", "signature", "www", "http",
+                    "for", "and", "with", "the", "to", "in", "on", "introduction", "fundamentals", "foundations"}
+
+
+def looks_like_person_name(text: Optional[str]) -> bool:
+    """2-5 words of letters (names like "O'Neil", "Jean-Luc", "A. Smith" allowed), no digits or certificate words."""
+    if not text:
+        return False
+    words = text.strip().split()
+    if not 2 <= len(words) <= 5 or any(ch.isdigit() for ch in text):
+        return False
+    if any(w.lower().strip(".,") in NOT_A_NAME_WORDS for w in words):
+        return False
+    return all(re.fullmatch(r"[^\W\d_][\w.'\-]*", w) for w in words)
+
+
+def parse_coursera_certificate_lines(lines: List[str]) -> Dict[str, Optional[str]]:
+    """
+    Recipient, course title and date from the text lines of a Coursera certificate PDF. Layouts vary
+    ("an online non-credit course authorized by ...", a leading date line, a logo line), so lines are
+    matched by what they contain, never by position alone.
+    """
+    issue_date = next((m.group(0) for l in lines for m in [COURSERA_DATE_RE.search(l)] if m), None)
+    content = [l for l in lines if not (COURSERA_DATE_RE.search(l) and len(l) <= 20)]  # drop date-only lines
+    recipient = title = None
+    marker = next((i for i, l in enumerate(content) if COURSERA_MARKER_RE.search(l)), -1)
+    completed_line = marker >= 0 and "has successfully completed" in content[marker].lower()
+    if completed_line and marker >= 1 and looks_like_person_name(content[marker - 1]):
+        # "<name>" / "has successfully completed" / "<course>"
+        recipient = content[marker - 1]
+        title = content[marker + 1] if marker + 1 < len(content) else None
+    elif marker >= 2 and looks_like_person_name(content[marker - 2]):
+        # "<name>" / "<course>" / "an online ... authorized by ..."
+        recipient, title = content[marker - 2], content[marker - 1]
+    else:
+        for i, l in enumerate(content):
+            if looks_like_person_name(l):
+                recipient = l
+                nxt = content[i + 1] if i + 1 < len(content) else None
+                if nxt and not COURSERA_MARKER_RE.search(nxt):
+                    title = nxt
+                break
+    return {"recipient_name": recipient, "course_title": title, "issue_date": issue_date}
 
 
 def compute_evidence_hash(content: bytes) -> str:
@@ -119,25 +172,10 @@ class CourseraAdapter(BaseIssuerAdapter):
                     import pymupdf
                     pdf_doc = pymupdf.open("pdf", p_bytes)
                     pdf_lines = [l.strip() for page in pdf_doc for l in page.get_text().splitlines() if l.strip()]
-                    # Look for date
-                    date_re = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b", re.IGNORECASE)
-                    for l in pdf_lines:
-                        dm = date_re.search(l)
-                        if dm:
-                            issue_date = dm.group(0)
-                            break
-                    # Look for recipient and title
-                    comp_idx = -1
-                    for idx, l in enumerate(pdf_lines):
-                        if any(marker in l.lower() for marker in ["has successfully completed", "an online course authorized by", "an online specialization authorized by"]):
-                            comp_idx = idx
-                            break
-                    if comp_idx >= 2:
-                        course_title = pdf_lines[comp_idx - 1]
-                        recipient_name = pdf_lines[comp_idx - 2]
-                    elif len(pdf_lines) >= 3:
-                        recipient_name = pdf_lines[1]
-                        course_title = pdf_lines[2]
+                    parsed = parse_coursera_certificate_lines(pdf_lines)
+                    issue_date = issue_date or parsed["issue_date"]
+                    recipient_name = recipient_name or parsed["recipient_name"]
+                    course_title = course_title or parsed["course_title"]
             except Exception as exc:
                 logger.debug("Failed to fetch/parse Coursera official PDF for %s: %s", cred_id, exc)
 
@@ -221,6 +259,12 @@ class CourseraAdapter(BaseIssuerAdapter):
 
         if recipient_name and (recipient_name.lower().strip() in GENERIC_TITLES or "coursera" in recipient_name.lower()):
             recipient_name = None
+        # Never report a date or a course line as the recipient: without a believable name the result is
+        # "pending manual check", not a mismatch
+        if recipient_name and not looks_like_person_name(recipient_name):
+            recipient_name = None
+        if course_title and looks_like_person_name(course_title) and course_title == recipient_name:
+            course_title = None
 
         return IssuerRecord(
             issuer_name="Coursera",

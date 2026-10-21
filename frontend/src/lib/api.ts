@@ -92,3 +92,25 @@ export const uploadCert = async (file: File, candidateName?: string): Promise<Ce
   if (candidateName) form.append('candidate_name', candidateName);
   return request<CertificateEvidence>('/api/upload-cert', { method: 'POST', body: form });
 };
+
+/** Download the PDF report of a signed passport (the server refuses edited passports). */
+export async function downloadPassportPdf(passport: { candidate_name: string }): Promise<void> {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  if (API_KEY) headers.set('X-API-Key', API_KEY);
+  let res: Response;
+  try {
+    res = await fetch('/api/report/pdf', { method: 'POST', headers, body: JSON.stringify(passport) });
+  } catch {
+    throw new ApiError('Could not reach the backend. Is the API running on port 8000?');
+  }
+  if (!res.ok) throw new ApiError(await describe(res));
+  const slug = passport.candidate_name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'candidate';
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `skill-passport-${slug}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
