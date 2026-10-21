@@ -61,11 +61,17 @@ CORS_ORIGINS = [
         "SKILL_PASSPORT_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173"
     ).split(",") if o.strip()
 ]
+CORS_ORIGIN_REGEX = os.getenv(
+    "SKILL_PASSPORT_CORS_ORIGIN_REGEX",
+    r"^https://.*\.vercel\.app$"
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "X-API-Key"],
 )
 
