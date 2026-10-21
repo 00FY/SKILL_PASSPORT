@@ -684,6 +684,28 @@ ADAPTIVE_QUESTION_BANK: Dict[str, List[Dict[str, Any]]] = {
             "explanation": "Default mutable arguments are evaluated once at function definition time in Python."
         },
         {
+            "task_id": "py-comp-1b",
+            "skill": "Python",
+            "stage_type": "comprehension",
+            "difficulty": 1,
+            "prompt": "What does `7 // 2` evaluate to in Python 3?",
+            "starter_code": "res = 7 // 2\nprint(res)",
+            "options": ["3.5", "3", "4", "3.0"],
+            "correct_option": 1,
+            "explanation": "The // operator performs floor division, truncating towards negative infinity and returning an integer."
+        },
+        {
+            "task_id": "py-comp-1c",
+            "skill": "Python",
+            "stage_type": "comprehension",
+            "difficulty": 1,
+            "prompt": "What is the output of `bool([])` vs `bool([0])`?",
+            "starter_code": "print(bool([]), bool([0]))",
+            "options": ["False False", "False True", "True False", "True True"],
+            "correct_option": 1,
+            "explanation": "Empty sequences are falsy in Python, whereas a non-empty list (even containing 0) is truthy."
+        },
+        {
             "task_id": "py-dbg-1",
             "skill": "Python",
             "stage_type": "debugging",
@@ -746,6 +768,39 @@ ADAPTIVE_QUESTION_BANK: Dict[str, List[Dict[str, Any]]] = {
             "options": ["[2, 4, 6]", "[4, 6]", "[2, 4]", "TypeError: generator is not subscriptable"],
             "correct_option": 1,
             "explanation": "The generator filters items where x > 1 (leaving 2, 3) and doubles them to yield [4, 6]."
+        },
+        {
+            "task_id": "py-comp-2b",
+            "skill": "Python",
+            "stage_type": "comprehension",
+            "difficulty": 2,
+            "prompt": "What does the following closure snippet print?",
+            "starter_code": "funcs = [lambda: i for i in range(3)]\nprint([f() for f in funcs])",
+            "options": ["[0, 1, 2]", "[2, 2, 2]", "[3, 3, 3]", "NameError: name 'i' is not defined"],
+            "correct_option": 1,
+            "explanation": "Closures in Python bind late by reference. By the time the lambdas are called, i has completed the loop with value 2."
+        },
+        {
+            "task_id": "py-comp-2c",
+            "skill": "Python",
+            "stage_type": "comprehension",
+            "difficulty": 2,
+            "prompt": "What does the dictionary merge unpacking produce?",
+            "starter_code": "d1 = {'a': 1, 'b': 2}\nd2 = {'b': 99, 'c': 3}\nres = {**d1, **d2}\nprint(res)",
+            "options": ["{'a': 1, 'b': 2, 'c': 3}", "{'a': 1, 'b': 99, 'c': 3}", "TypeError: duplicate key 'b'", "{'b': 99}"],
+            "correct_option": 1,
+            "explanation": "Later keys overwrite earlier keys during dictionary unpacking in Python 3.5+."
+        },
+        {
+            "task_id": "py-comp-2d",
+            "skill": "Python",
+            "stage_type": "comprehension",
+            "difficulty": 2,
+            "prompt": "What is the output of the extended slice `nums[::-2]`?",
+            "starter_code": "nums = [10, 20, 30, 40, 50]\nprint(nums[::-2])",
+            "options": ["[50, 30, 10]", "[50, 40, 30, 20, 10]", "[10, 30, 50]", "[40, 20]"],
+            "correct_option": 0,
+            "explanation": "A negative step reverses the traversal; step 2 picks every second element starting from the last (50, 30, 10)."
         },
         {
             "task_id": "py-dbg-2",

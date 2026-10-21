@@ -43,10 +43,11 @@ You MUST respond with a single valid JSON object strictly matching the schema fo
 
 RULES:
 1. For COMPREHENSION:
-   - Provide a realistic 4-10 line code snippet testing a subtle language/framework behavior (e.g., scoping, closures, async, memory, immutability, type coercion).
-   - Provide exactly 4 distinct plausible options.
-   - Provide "correct_option" as an integer index (0, 1, 2, or 3).
-   - Provide a technical "explanation".
+   - Provide "prompt": Clear instruction describing the task (e.g., "What will this code print or do?").
+   - Provide "starter_code": A realistic 4-10 line code snippet testing a subtle language/framework behavior (e.g., scoping, closures, async, memory, immutability, type coercion).
+   - Provide "options": Exactly 4 distinct plausible options.
+   - Provide "correct_option": Integer index (0, 1, 2, or 3).
+   - Provide "explanation": Technical rationale.
 
 2. For DEBUGGING:
    - Provide "starter_code" implementing a realistic function with an intentional bug (e.g., off-by-one, boundary condition, mutable state leak, wrong logic branch).
@@ -130,8 +131,11 @@ class DynamicQuestionGenerator:
         context: Dict[str, Any],
         api_key: str
     ) -> Optional[Dict[str, Any]]:
-        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        configured_model = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
+        models_to_try = [configured_model]
+        for fallback_model in ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash"]:
+            if fallback_model not in models_to_try:
+                models_to_try.append(fallback_model)
 
         user_content = self._build_prompt_payload(skill, stage_type, difficulty, context)
         payload = {
@@ -145,20 +149,28 @@ class DynamicQuestionGenerator:
             "generationConfig": {"response_mime_type": "application/json"}
         }
 
-        for attempt in range(2):
-            try:
-                res = httpx.post(url, json=payload, headers={"x-goog-api-key": api_key}, timeout=25.0)
-                if res.status_code in (503, 429) and attempt == 0:
-                    time.sleep(1.2)
-                    continue
-                res.raise_for_status()
-                text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                data = json.loads(text)
-                return self._normalize_generated_task(data, skill, stage_type, difficulty)
-            except Exception as exc:
-                if attempt == 1:
-                    logger.warning("Gemini task generation failed, falling back to curated bank: %s", exc)
-                    return None
+        last_exc = None
+        for model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            for attempt in range(2):
+                try:
+                    res = httpx.post(url, json=payload, headers={"x-goog-api-key": api_key}, timeout=25.0)
+                    if res.status_code in (503, 429):
+                        if attempt == 0:
+                            time.sleep(1.0)
+                            continue
+                        break
+                    res.raise_for_status()
+                    text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    data = json.loads(text)
+                    return self._normalize_generated_task(data, skill, stage_type, difficulty)
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt == 0:
+                        time.sleep(0.8)
+
+        if last_exc:
+            logger.warning("Gemini task generation failed across models %s, falling back to curated bank: %s", models_to_try, last_exc)
         return None
 
     def _generate_via_openai(
@@ -241,19 +253,27 @@ class DynamicQuestionGenerator:
         data["stage_type"] = stage_type.value
         data["difficulty"] = difficulty.value
 
-        # Normalize prompt and starter code aliases
+        # Normalize starter code aliases across all LLM output variations
+        starter_candidates = [
+            data.get("starter_code"),
+            data.get("code_snippet"),
+            data.get("code"),
+            data.get("snippet"),
+            data.get("codeSnippet"),
+            data.get("python_code")
+        ]
+        resolved_code = next((c for c in starter_candidates if isinstance(c, str) and c.strip()), None)
+        if resolved_code:
+            data["starter_code"] = resolved_code
+
+        # Normalize prompt aliases
         if not data.get("prompt"):
             if data.get("question"):
                 data["prompt"] = data["question"]
-            elif data.get("code_snippet"):
+            elif data.get("starter_code"):
                 data["prompt"] = "Predict the output or behavior of the following code snippet:"
-                if not data.get("starter_code"):
-                    data["starter_code"] = data["code_snippet"]
             else:
                 data["prompt"] = f"Evaluate the following {skill} scenario."
-
-        if not data.get("starter_code") and data.get("code_snippet"):
-            data["starter_code"] = data["code_snippet"]
 
         # Normalize comprehension options & correct_option
         if stage_type == StageType.COMPREHENSION:
@@ -379,8 +399,9 @@ class DynamicQuestionGenerator:
 
         # Closest available difficulty
         if stage_tasks:
-            stage_tasks.sort(key=lambda t: abs(t["difficulty"] - difficulty.value))
-            return stage_tasks[0]
+            min_dist = min(abs(t["difficulty"] - difficulty.value) for t in stage_tasks)
+            closest = [t for t in stage_tasks if abs(t["difficulty"] - difficulty.value) == min_dist]
+            return random.choice(closest)
 
         # Generic procedural generation
         fallbacks = generate_generic_adaptive_tasks(skill)

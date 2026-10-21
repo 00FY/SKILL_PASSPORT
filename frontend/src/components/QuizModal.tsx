@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Loader2, X, CheckCircle2, XCircle, AlertCircle, ArrowRight,
   Terminal, Code, Bug, BookOpen, Brain, Sparkles, RefreshCw, Zap
@@ -45,7 +45,7 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
   const [appliedPassport, setAppliedPassport] = useState<PassportDocument | null>(null);
 
   // Initialize assessment session
-  useEffect(() => {
+  const initAssessment = useCallback(() => {
     if (!skillName) return;
 
     setLoading(true);
@@ -93,7 +93,11 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
       .finally(() => {
         setLoading(false);
       });
-  }, [skillName]);
+  }, [skillName, passport?.candidate_name, passport?.applied_role]);
+
+  useEffect(() => {
+    initAssessment();
+  }, [initAssessment]);
 
   if (!skillName) return null;
 
@@ -341,7 +345,15 @@ export const QuizModal: React.FC<QuizModalProps> = ({ skillName, passport, onClo
                 )}
               </div>
 
-              <div className="flex justify-end pt-2">
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  id="modal-retake-assessment-btn"
+                  onClick={initAssessment}
+                  className="flex items-center gap-2 rounded-xl border border-white/20 bg-white/5 px-5 py-2.5 font-semibold text-white hover:bg-white/10 transition"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  <span>Retake Assessment</span>
+                </button>
                 <button
                   onClick={onClose}
                   className="rounded-xl bg-indigo-500 px-6 py-2.5 font-semibold text-white shadow-lg shadow-indigo-500/20 hover:bg-indigo-400 transition"

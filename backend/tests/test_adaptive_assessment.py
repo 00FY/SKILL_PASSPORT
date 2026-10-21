@@ -115,7 +115,23 @@ def test_reasoning_rubric_evaluation_and_injection_defense():
     assert "Concurrency solution" in hits
 
 
-def test_full_adaptive_assessment_workflow_via_api():
+def test_full_adaptive_assessment_workflow_via_api(monkeypatch):
+    from app.main import adaptive_engine
+    from app.module3_rubric.question_bank import ADAPTIVE_QUESTION_BANK
+    benchmarks = {
+        (t["stage_type"], t["difficulty"]): t
+        for t in ADAPTIVE_QUESTION_BANK["Python"]
+    }
+    monkeypatch.setattr(
+        adaptive_engine.generator,
+        "generate_task",
+        lambda skill, stage_type, difficulty, context=None, seen_task_ids=None: benchmarks.get(
+            (stage_type.value if hasattr(stage_type, "value") else stage_type,
+             difficulty.value if hasattr(difficulty, "value") else difficulty),
+            ADAPTIVE_QUESTION_BANK["Python"][0]
+        )
+    )
+
     # 1. Start assessment for Python
     start_res = client.post("/api/assessment/start", json={"skill": "Python", "initial_verdict": "VERIFIED"})
     assert start_res.status_code == 200
@@ -127,10 +143,11 @@ def test_full_adaptive_assessment_workflow_via_api():
 
     # 2. Submit stage 1 (Comprehension) -> Pass to climb to Tier 3
     # py-comp-2 correct option is 1
+    task1_def = adaptive_engine._get_task_by_id("Python", task1["task_id"])
     sub1 = client.post("/api/assessment/submit-step", json={
         "session_id": session_id,
         "task_id": task1["task_id"],
-        "selected_option": 1
+        "selected_option": task1_def.get("correct_option", 0)
     })
     assert sub1.status_code == 200
     step1_res = sub1.json()
