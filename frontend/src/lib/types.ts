@@ -22,6 +22,72 @@ export interface SkillPassportItem {
   files_count?: number | null;
   signals: string[];
   reasoning?: string | null;
+  authorship_check?: AuthorshipCheck | null;
+}
+
+export type AuthorshipStatus = 'available' | 'unavailable' | 'confirmed' | 'inconclusive' | 'not_explained';
+
+/** Defend Your Code: can the candidate explain functions git blame says they wrote? */
+export interface AuthorshipCheck {
+  status: AuthorshipStatus;
+  reason?: string | null;
+  question_count: number;
+  correct?: number | null;
+  total?: number | null;
+  points_effect: number;
+  commits: string[];
+}
+
+export type DefendKind = 'predict' | 'hidden_line' | 'name';
+
+export interface DefendQuestion {
+  question_id: string;
+  number: number;
+  kind: DefendKind;
+  prompt: string;
+  language: string;
+  repo_url: string;
+  commit: string;
+  path: string;
+  line: number;
+  function: string;
+  code: string;
+  context: string[];
+  call: string;
+  options: string[];
+}
+
+export interface DefendStart {
+  session_id: string;
+  total: number;
+  time_limit_s: number;
+  question: DefendQuestion;
+}
+
+export interface DefendReviewItem {
+  path: string;
+  function: string;
+  kind: DefendKind;
+  prompt: string;
+  call: string;
+  your_answer: string | null;
+  correct_answer: string;
+  correct: boolean;
+  timed_out: boolean;
+}
+
+export interface DefendResult {
+  attempt_id: string;
+  correct: number;
+  total: number;
+  status: AuthorshipStatus;
+  review: DefendReviewItem[];
+}
+
+export interface DefendAnswerResponse {
+  done: boolean;
+  question?: DefendQuestion;
+  result?: DefendResult;
 }
 
 export interface RefusalItem {

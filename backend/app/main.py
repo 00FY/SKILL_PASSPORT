@@ -12,6 +12,7 @@ from .schemas import (
     SimulationRequest, SimulationResult, QuizResult, QuizSubmission,
     ApplyQuizRequest, AuditStep, RunAuditLog, StartAssessmentRequest,
     TaskSubmissionRequest, StepEvaluationResult, VerdictEnum,
+    AuthorshipCheck, DefendStartRequest, DefendAnswerRequest, DefendApplyRequest,
     CertificateEvidence, PillarScores
 )
 from .skills import normalize_skill
@@ -32,6 +33,12 @@ from .module3_rubric import (
     AdaptiveAssessmentEngine, CONTRADICTED_POINTS, DeterministicScoringEngine
 )
 from .module3_rubric.adaptive_engine import AttemptLimitReached
+from .module3_rubric.defend_your_code import (
+    DefendYourCode, adjust_points, STATUS_AVAILABLE, STATUS_UNAVAILABLE, STATUS_CONFIRMED, STATUS_NOT_EXPLAINED,
+    BONUS_POINTS, FAIL_FACTOR,
+)
+from .module2_harvester.function_picker import functions_from_source, QUIZ_LANGUAGES
+from .data.demo_defend import DEMO_DEFEND_FILES
 from .schemas import VerdictEnum
 from .data.demo_personas import (
     PRIYA_CLAIMS, PRIYA_EVIDENCE,
@@ -66,6 +73,7 @@ harvester = EvidenceHarvesterService()
 passport_svc = PassportService()
 quiz_engine = QuestionBankEngine()
 adaptive_engine = AdaptiveAssessmentEngine(storage_dir=".sessions")
+defend = DefendYourCode(sandbox=adaptive_engine.sandbox)
 quiz_attempts = QuizAttemptStore()
 jobs = JobManager()
 # Each analysis clones and blames repositories, so they are limited per client address
@@ -205,6 +213,7 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
 
     # 0. Profile discovery if username provided and no explicit repos given
     profile_info = None
+    profile_problem = None
     if req.github_username and req.github_username.strip():
         try:
             report(f"Scanning GitHub profile @{req.github_username.strip()}")
@@ -212,8 +221,12 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
             profile_info = scanner.scan_profile(req.github_username.strip())
             if not repos and profile_info.repo_urls:
                 repos = profile_info.repo_urls[:MAX_REPOS]
-        except Exception:
-            pass
+            if not profile_info.repo_urls and profile_info.warnings:
+                profile_problem = profile_info.warnings[0]
+        except ValueError as exc:
+            profile_problem = str(exc)
+        except Exception as exc:
+            profile_problem = f"GitHub profile lookup failed: {exc}"
 
     # 1. Module 1: Extract claims or build from code profile & certs (Optional Resume)
     has_resume = bool(req.resume_text and req.resume_text.strip())
@@ -254,6 +267,15 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
         repos = _repo_links(resume_links)[:MAX_REPOS]
         auto_detected = bool(repos)
 
+    if not repos and profile_problem:
+        # The repositories were meant to come from the GitHub profile; don't issue a passport without them
+        raise JobFailure(
+            f"Couldn't list @{req.github_username.strip()}'s repositories: {profile_problem} "
+            "Paste the repository URLs into 'Repositories to analyze' instead (cloning doesn't use the GitHub API), "
+            "or set GITHUB_TOKEN on the server and try again.",
+            503,
+        )
+
     # 2. Module 2: Code Evidence Harvester (real git blame, AST parsing, test detection)
     try:
         evidence_doc = harvester.harvest_many(repos, claims_doc.candidate_name, req.git_identities, progress=report)
@@ -267,9 +289,75 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
     # 3. Module 3: 4-State Rubric Engine & Cryptographic Signer
     report("Scoring claims and signing the passport")
     gh_user = req.github_username.strip() if req.github_username and req.github_username.strip() else None
-    return passport_svc.generate_passport(
+    passport = passport_svc.generate_passport(
         claims_doc, evidence_doc, evidence_source="harvested", github_username=gh_user
     )
+    report("Preparing Defend Your Code questions from the candidate's own functions")
+    return _attach_defend(passport, functions=evidence_doc.authored_functions)
+
+
+# --- Defend Your Code: optional questions about the candidate's own functions ---
+_demo_defend_questions: Dict[str, list] = {}
+
+
+def _attach_defend(passport: PassportDocument, functions: Optional[list] = None,
+                   prebuilt: Optional[Dict[str, list]] = None) -> PassportDocument:
+    """
+    Marks, for each language skill backed by code, whether Defend Your Code is available (and why not),
+    registers its questions, and re-signs the passport. prebuilt maps skill -> questions (demo personas).
+    """
+    by_language: Dict[str, list] = {}
+    for f in functions or []:
+        by_language.setdefault(f["language"], []).append(f)
+    changed = False
+    for item in passport.skills:
+        if item.verdict not in (VerdictEnum.VERIFIED, VerdictEnum.PARTIALLY_SUPPORTED):
+            continue
+        skill = normalize_skill(item.name)
+        reason = ""
+        if prebuilt is not None:
+            if skill not in prebuilt:
+                continue
+            questions = prebuilt[skill]
+        else:
+            if skill not in QUIZ_LANGUAGES:
+                continue
+            try:
+                questions, reason = defend.build_questions(by_language.get(skill, []), seed=f"{passport.passport_id}:{skill}")
+            except SandboxUnavailable:
+                questions, reason = [], "The code runner was busy; re-run the analysis to enable it."
+            if not by_language.get(skill):
+                reason = f"No {skill} functions of at least 8 lines that you wrote were found."
+        if questions:
+            defend.register(_passport_key(passport), item.name, questions)
+            item.authorship_check = AuthorshipCheck(
+                status=STATUS_AVAILABLE,
+                question_count=len(questions),
+                commits=sorted({f"{q['repo_url']}@{q['commit'][:7]}" for q in questions if q.get("commit")}),
+            )
+        else:
+            item.authorship_check = AuthorshipCheck(status=STATUS_UNAVAILABLE, reason=reason)
+        changed = True
+    if changed:
+        passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
+    return passport
+
+
+def _demo_defend(passport: PassportDocument, persona: str) -> PassportDocument:
+    spec = DEMO_DEFEND_FILES.get(persona)
+    if not spec:
+        return passport
+    if persona not in _demo_defend_questions:
+        functions = [
+            f for path, source in spec["files"].items()
+            for f in functions_from_source(source.lstrip("\n"), path, None, spec["repo_url"], spec["commit"])
+        ]
+        try:
+            questions, _ = defend.build_questions(functions, seed=f"demo:{persona}")
+        except SandboxUnavailable:
+            return passport
+        _demo_defend_questions[persona] = questions
+    return _attach_defend(passport, prebuilt={"Python": _demo_defend_questions[persona]})
 
 
 @app.post("/api/analyze", response_model=PassportDocument, dependencies=[Depends(limit_analysis)])
@@ -433,9 +521,7 @@ def apply_quiz_grade(req: ApplyQuizRequest):
     grade = attempt.grade
     grade_weight = GRADE_WEIGHTS[grade]
     skill_item.test_grade = grade
-    skill_item.final_points = DeterministicScoringEngine.calculate_skill_points(
-        skill_item.evidence_score, grade, consistency_bonus=skill_item.consistency_bonus
-    )
+    skill_item.final_points = _skill_points(skill_item)
 
     # Clean up pending quiz notice
     skill_item.signals = [s for s in skill_item.signals if "Quiz Pending" not in s]
@@ -443,32 +529,8 @@ def apply_quiz_grade(req: ApplyQuizRequest):
         skill_item.reasoning = re.sub(r"\s*Mandatory (?:skill )?challenge (?:quiz )?pending.*", "", skill_item.reasoning).strip()
         skill_item.reasoning += f" Completed skill challenge quiz (Grade {grade})."
 
-    # Recalculate pillar scores and balanced overall score
-    if passport.pillar_scores:
-        tested_skills = [s for s in passport.skills if s.test_grade != "E"]
-        if tested_skills:
-            quiz_weights = [GRADE_WEIGHTS.get(s.test_grade, 6) * 10 for s in tested_skills]
-            passport.pillar_scores.quiz_score = round(sum(quiz_weights) / len(quiz_weights))
-        passport.pillar_scores.code_score = round(sum(s.final_points for s in passport.skills) / max(1, len(passport.skills)))
-        balanced_overall, weights_used = DeterministicScoringEngine.calculate_pillar_scores(
-            code_score=passport.pillar_scores.code_score,
-            resume_score=passport.pillar_scores.resume_score,
-            cert_score=passport.pillar_scores.cert_score,
-            quiz_score=passport.pillar_scores.quiz_score
-        )
-        passport.pillar_scores.overall_score = balanced_overall
-        passport.pillar_scores.weights_used = weights_used
-        passport.overall_score = balanced_overall
-    else:
-        passport.overall_score = DeterministicScoringEngine.overall_score([s.final_points for s in passport.skills])
-
-    if passport.audit_log is None:
-        passport.audit_log = RunAuditLog(
-            audit_id=f"audit_{uuid.uuid4().hex[:10]}",
-            candidate_name=passport.candidate_name,
-            traces=[],
-            generated_at=datetime.now(timezone.utc).isoformat()
-        )
+    _rebalance(passport)
+    _ensure_audit_log(passport)
 
     # The trajectory comes from the server's record, never from the request
     if attempt.trajectory:
@@ -496,6 +558,140 @@ def apply_quiz_grade(req: ApplyQuizRequest):
     return passport
 
 
+def _skill_points(item) -> int:
+    """Evidence x Grade Weight + Consistency Bonus, then the Defend Your Code effect if one was applied."""
+    base = DeterministicScoringEngine.calculate_skill_points(
+        item.evidence_score, item.test_grade, consistency_bonus=item.consistency_bonus
+    )
+    check = item.authorship_check
+    return adjust_points(base, check.status if check else None)
+
+
+def _ensure_audit_log(passport: PassportDocument) -> None:
+    if passport.audit_log is None:
+        passport.audit_log = RunAuditLog(
+            audit_id=f"audit_{uuid.uuid4().hex[:10]}",
+            candidate_name=passport.candidate_name,
+            traces=[],
+            generated_at=datetime.now(timezone.utc).isoformat()
+        )
+
+
+def _rebalance(passport: PassportDocument) -> None:
+    """Recalculates pillar scores and the balanced overall score after a skill's points change."""
+    if passport.pillar_scores:
+        tested_skills = [s for s in passport.skills if s.test_grade != "E"]
+        if tested_skills:
+            quiz_weights = [GRADE_WEIGHTS.get(s.test_grade, 6) * 10 for s in tested_skills]
+            passport.pillar_scores.quiz_score = round(sum(quiz_weights) / len(quiz_weights))
+        passport.pillar_scores.code_score = round(sum(s.final_points for s in passport.skills) / max(1, len(passport.skills)))
+        balanced_overall, weights_used = DeterministicScoringEngine.calculate_pillar_scores(
+            code_score=passport.pillar_scores.code_score,
+            resume_score=passport.pillar_scores.resume_score,
+            cert_score=passport.pillar_scores.cert_score,
+            quiz_score=passport.pillar_scores.quiz_score
+        )
+        passport.pillar_scores.overall_score = balanced_overall
+        passport.pillar_scores.weights_used = weights_used
+        passport.overall_score = balanced_overall
+    else:
+        passport.overall_score = DeterministicScoringEngine.overall_score([s.final_points for s in passport.skills])
+
+
+def _defend_target(passport: PassportDocument, skill: str):
+    if not CryptoSigner.verify_passport_signature(passport.model_dump(mode="json"), passport.tamper_proof_hash)["valid"]:
+        raise HTTPException(status_code=400, detail="This passport's signature is invalid.")
+    target = normalize_skill(skill).lower()
+    item = next((s for s in passport.skills if normalize_skill(s.name).lower() == target), None)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill}' is not one of this passport's claims.")
+    if item.verdict == VerdictEnum.CONTRADICTED:
+        raise HTTPException(status_code=409, detail=f"{item.name} is contradicted by repository evidence.")
+    return item
+
+
+@app.post("/api/defend/start")
+def defend_start(req: DefendStartRequest):
+    """Starts the optional, single-attempt Defend Your Code test for one claim of a signed passport."""
+    item = _defend_target(req.passport, req.skill)
+    check = item.authorship_check
+    if not check or check.status == STATUS_UNAVAILABLE:
+        raise HTTPException(status_code=409, detail=(check.reason if check and check.reason else
+                                                     f"Defend Your Code isn't available for {item.name}."))
+    if check.status != STATUS_AVAILABLE:
+        raise HTTPException(status_code=409, detail="Defend Your Code was already taken for this passport.")
+    try:
+        return defend.start(_passport_key(req.passport), item.name, req.extended_time)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/defend/answer")
+def defend_answer(req: DefendAnswerRequest):
+    try:
+        return defend.answer(req.session_id, req.question_id, req.choice, req.pastes, req.tab_switches)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/defend/apply", response_model=PassportDocument)
+def defend_apply(req: DefendApplyRequest):
+    """
+    Applies a finished Defend Your Code attempt to the passport it was taken for and re-signs it.
+    Confirmed: +BONUS_POINTS to that skill (max 100). Not explained: points x FAIL_FACTOR. Otherwise unchanged.
+    """
+    passport = req.passport
+    attempt = defend.peek_attempt(req.attempt_id)
+    if attempt is None:
+        raise HTTPException(status_code=400, detail="Unknown, expired or already applied Defend Your Code attempt.")
+    item = _defend_target(passport, attempt.skill)
+    if attempt.passport_key != _passport_key(passport):
+        raise HTTPException(status_code=400, detail="This attempt was taken for a different passport.")
+    if not item.authorship_check or item.authorship_check.status != STATUS_AVAILABLE:
+        raise HTTPException(status_code=409, detail="A Defend Your Code result is already on this passport.")
+    defend.consume_attempt(req.attempt_id)
+
+    before = item.final_points
+    item.authorship_check = AuthorshipCheck(
+        status=attempt.status,
+        question_count=attempt.total,
+        correct=attempt.correct,
+        total=attempt.total,
+        commits=attempt.commits,
+    )
+    item.final_points = _skill_points(item)
+    item.authorship_check.points_effect = item.final_points - before
+    if attempt.status == STATUS_CONFIRMED:
+        item.signals.append(f"Authorship confirmed: explained {attempt.correct}/{attempt.total} of their own functions")
+        effect = f"+{item.authorship_check.points_effect} points (bonus {BONUS_POINTS}, max 100)"
+    elif attempt.status == STATUS_NOT_EXPLAINED:
+        item.signals.append(f"Could not explain own code: {attempt.correct}/{attempt.total} of their own functions")
+        effect = f"{item.authorship_check.points_effect} points (x{FAIL_FACTOR})"
+    else:
+        item.signals.append(f"Authorship check inconclusive: {attempt.correct}/{attempt.total} of their own functions")
+        effect = "no change"
+
+    _rebalance(passport)
+    _ensure_audit_log(passport)
+    passport.audit_log.traces.append(AuditStep(
+        step="AUTHORSHIP_CHECK_COMPLETED",
+        target=item.name,
+        rule_applied=(
+            f"Explained {attempt.correct}/{attempt.total} own functions ({', '.join(attempt.functions)}) "
+            f"from {', '.join(attempt.commits) or 'the analysed repositories'}; "
+            f"extended time: {'yes' if attempt.extended_time else 'no'}; "
+            f"browser-reported pastes: {attempt.pastes}, tab switches: {attempt.tab_switches}"
+        ),
+        verdict_reached=f"{attempt.status}: {effect}; passport re-signed",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    ))
+    passport.issued_at = datetime.now(timezone.utc).isoformat()
+    passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
+    return passport
+
+
 # --- Cryptographic Verification ---
 @app.post("/api/verify-signature")
 def verify_signature(payload: Dict[str, Any] = Body(...), claimed_hash: Optional[str] = None):
@@ -514,11 +710,11 @@ def verify_signature(payload: Dict[str, Any] = Body(...), claimed_hash: Optional
 def get_demo_persona(persona: str):
     key = persona.lower()
     if key in ["priya", "honest"]:
-        return passport_svc.generate_passport(PRIYA_CLAIMS, PRIYA_EVIDENCE, {"Python": "A", "FastAPI": "B", "Docker": "C"}, evidence_source="demo")
+        return _demo_defend(passport_svc.generate_passport(PRIYA_CLAIMS, PRIYA_EVIDENCE, {"Python": "A", "FastAPI": "B", "Docker": "C"}, evidence_source="demo"), "priya")
     elif key in ["alex", "inflater", "spammer"]:
         return passport_svc.generate_passport(ALEX_CLAIMS, ALEX_EVIDENCE, {"Python": "D", "Kubernetes": "E"}, evidence_source="demo")
     elif key in ["jordan", "learner"]:
-        return passport_svc.generate_passport(JORDAN_CLAIMS, JORDAN_EVIDENCE, {"Python": "B", "Docker": "C"}, evidence_source="demo")
+        return _demo_defend(passport_svc.generate_passport(JORDAN_CLAIMS, JORDAN_EVIDENCE, {"Python": "B", "Docker": "C"}, evidence_source="demo"), "jordan")
     elif key in ["redteam", "security", "adversary", "cheater"]:
         return passport_svc.generate_passport(RED_TEAM_CLAIMS, RED_TEAM_EVIDENCE, {"Python": "D"}, evidence_source="demo")
     else:

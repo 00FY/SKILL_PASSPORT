@@ -64,7 +64,7 @@ class ProfileScanner:
 
         warnings: List[str] = []
         if RATE_LIMITED in problems:
-            warnings.append("GitHub API rate limit reached. Set GITHUB_TOKEN in backend environment to raise limits.")
+            warnings.append("GitHub's API limit was reached (60 requests an hour without a token).")
         elif any("HTTP" in p or "network" in p for p in problems):
             warnings.append(f"GitHub API returned notices: {', '.join(set(problems))}")
 

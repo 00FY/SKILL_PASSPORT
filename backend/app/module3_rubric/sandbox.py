@@ -60,7 +60,8 @@ class CodeSandbox:
             logger.warning("Sandbox: process mode on Windows has no kernel CPU/memory limits; "
                            "set SKILL_PASSPORT_SANDBOX=docker before exposing the server to others.")
 
-    def run(self, code: str, fn_name: str, test_args: List[List[Any]]) -> SandboxResult:
+    def run(self, code: str, fn_name: str, test_args: List[List[Any]],
+            allowed_modules: Optional[List[str]] = None) -> SandboxResult:
         if len(code) > MAX_CODE_CHARS:
             return SandboxResult(definition_error=f"Submission too long (limit {MAX_CODE_CHARS} characters).")
         request = json.dumps({
@@ -71,6 +72,8 @@ class CodeSandbox:
             "cpu_seconds": self.cpu_seconds,
             "memory_mb": self.memory_mb,
             "max_loop_iterations": self.max_loop_iterations,
+            # Standard-library modules the code may import (none unless the caller allows some)
+            "allowed_modules": sorted(allowed_modules or []),
         })
         wall_timeout = min(
             MAX_WALL_TIMEOUT_S,

@@ -5,6 +5,7 @@ import { RecruiterView } from './components/RecruiterView';
 import { CandidateView } from './components/CandidateView';
 import { EvidenceDrawer } from './components/EvidenceDrawer';
 import { QuizModal } from './components/QuizModal';
+import { DefendModal } from './components/DefendModal';
 import { UploadModal } from './components/UploadModal';
 import { PytestGeneratorModal } from './components/PytestGeneratorModal';
 import { PassportDocument, SkillPassportItem } from './lib/types';
@@ -18,6 +19,7 @@ export const App: React.FC = () => {
 
   const [selectedSkill, setSelectedSkill] = useState<SkillPassportItem | null>(null);
   const [quizSkill, setQuizSkill] = useState<string | null>(null);
+  const [defendSkill, setDefendSkill] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [pytestOpen, setPytestOpen] = useState(false);
 
@@ -65,11 +67,18 @@ export const App: React.FC = () => {
         auditLog={passport?.audit_log}
         onClose={() => setSelectedSkill(null)}
         onOpenQuiz={name => { setSelectedSkill(null); setQuizSkill(name); }}
+        onOpenDefend={name => { setSelectedSkill(null); setDefendSkill(name); }}
       />
       <QuizModal
         skillName={quizSkill}
         passport={passport}
         onClose={() => setQuizSkill(null)}
+        onPassportUpdated={p => setPassport(p)}
+      />
+      <DefendModal
+        skillName={defendSkill}
+        passport={passport}
+        onClose={() => setDefendSkill(null)}
         onPassportUpdated={p => setPassport(p)}
       />
       <UploadModal

@@ -95,6 +95,8 @@ class GitBlameAnalyzer:
             total = cand = roots = 0
             best_run, run_start, run_end = (None, 0), None, None
             candidate_months = set()
+            # Which lines are the candidate's, so their own functions can be quizzed later
+            candidate_lines: Optional[List[int]] = [] if lang else None
             for line_no, (c_hash, author, email, content) in enumerate(entries, start=1):
                 if not content.strip():
                     continue  # blank lines carry no authorship
@@ -103,6 +105,8 @@ class GitBlameAnalyzer:
                     roots += 1
                 if matcher.matches(author, email):
                     cand += 1
+                    if candidate_lines is not None:
+                        candidate_lines.append(line_no)
                     ts = commit_ts_by_hash.get(c_hash)
                     if ts:
                         candidate_months.add(datetime.fromtimestamp(ts).strftime("%Y-%m"))
@@ -121,6 +125,8 @@ class GitBlameAnalyzer:
                 "best_run": best_run,
                 "candidate_months": sorted(candidate_months),
             }
+            if candidate_lines:
+                per_file[rel_path]["candidate_lines"] = candidate_lines
             if lang:
                 total_code_lines += total
                 candidate_code_lines += cand
@@ -150,6 +156,7 @@ class GitBlameAnalyzer:
             "commit_laundering_detected": commit_laundering,
             "initial_commit_line_pct": round(initial_commit_pct, 1),
             "is_shallow": is_shallow,
+            "head_sha": self._git(repo_path, ["rev-parse", "HEAD"]).strip(),
             "truncated": truncated,
             "files_blamed": len(per_file),
             "total_code_lines": total_code_lines,

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Award, FileCode, X } from 'lucide-react';
+import { Award, FileCode, ShieldCheck, X } from 'lucide-react';
 import { RunAuditLog, SkillPassportItem } from '../lib/types';
 import { VerdictBadge } from './VerdictBadge';
 import { pointsFormula } from '../lib/verdicts';
@@ -9,9 +9,10 @@ interface EvidenceDrawerProps {
   auditLog?: RunAuditLog | null;
   onClose: () => void;
   onOpenQuiz: (skillName: string) => void;
+  onOpenDefend: (skillName: string) => void;
 }
 
-export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ skill, auditLog, onClose, onOpenQuiz }) => {
+export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ skill, auditLog, onClose, onOpenQuiz, onOpenDefend }) => {
   if (!skill) return null;
   const traces = auditLog?.traces.filter(t => t.target === skill.name) ?? [];
 
@@ -110,8 +111,51 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ skill, auditLog,
               </button>
             </div>
           </div>
+
+          <DefendCard skill={skill} onOpen={() => onOpenDefend(skill.name)} />
         </div>
       </aside>
+    </div>
+  );
+};
+
+/** Optional "Defend Your Code" test: shown only where the analysis found the candidate's own functions. */
+const DefendCard: React.FC<{ skill: SkillPassportItem; onOpen: () => void }> = ({ skill, onOpen }) => {
+  const check = skill.authorship_check;
+  if (!check) return null;
+  const done = check.status === 'confirmed' || check.status === 'inconclusive' || check.status === 'not_explained';
+  const tone = check.status === 'confirmed'
+    ? 'border-emerald-500/30 bg-emerald-500/10'
+    : check.status === 'not_explained' ? 'border-red-500/30 bg-red-500/10' : 'border-white/10 bg-white/[0.03]';
+
+  return (
+    <div className={`rounded-xl border p-4 ${tone}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="flex items-center gap-1.5 font-semibold text-zinc-100">
+            <ShieldCheck className="h-4 w-4 text-emerald-400" /> Defend Your Code
+            <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-zinc-300">OPTIONAL</span>
+          </p>
+          <p className="mt-0.5 text-xs text-zinc-400">
+            {check.status === 'available' && <>{check.question_count} questions about functions <code>git blame</code> says you wrote. One attempt.</>}
+            {check.status === 'unavailable' && (check.reason || 'Not enough of your own runnable code was found.')}
+            {check.status === 'confirmed' && <>Authorship confirmed: explained {check.correct}/{check.total} of their own functions (+{check.points_effect} points).</>}
+            {check.status === 'inconclusive' && <>Explained {check.correct}/{check.total} of their own functions. No change to points.</>}
+            {check.status === 'not_explained' && <>Could not explain own code: {check.correct}/{check.total} correct ({check.points_effect} points).</>}
+          </p>
+          {done && check.commits.length > 0 && (
+            <p className="mt-1 font-mono text-[11px] text-zinc-500">{check.commits.join(', ')}</p>
+          )}
+        </div>
+        {check.status === 'available' && (
+          <button
+            onClick={onOpen}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm shadow-emerald-600/20 transition-colors hover:bg-emerald-500"
+          >
+            <ShieldCheck className="h-4 w-4" /> Defend your code
+          </button>
+        )}
+      </div>
     </div>
   );
 };
