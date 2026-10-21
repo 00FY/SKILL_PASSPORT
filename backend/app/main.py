@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from .schemas import (
     ClaimsDocument, EvidenceDocument, PassportDocument,
-    SimulationRequest, SimulationResult, QuizResult, QuizSubmission,
+    SimulationRequest, SimulationResult,
     ApplyQuizRequest, AuditStep, RunAuditLog, StartAssessmentRequest,
     TaskSubmissionRequest, StepEvaluationResult, VerdictEnum,
     AuthorshipCheck, DefendStartRequest, DefendAnswerRequest, DefendApplyRequest,
@@ -27,9 +27,10 @@ from .module2_harvester import (
 from .module2_harvester.repo_source import local_repos_allowed
 from .module2_harvester.harvester_service import MAX_REPOS
 from .module4_certs import CertificateParser
+from .module4_certs.cert_store import CertificateStore, check_holder
 from .module3_rubric.sandbox import SandboxUnavailable
 from .module3_rubric import (
-    PassportService, QuestionBankEngine, QuizAttemptStore, CryptoSigner, GRADE_WEIGHTS,
+    PassportService, QuizAttemptStore, CryptoSigner, GRADE_WEIGHTS,
     AdaptiveAssessmentEngine, CONTRADICTED_POINTS, DeterministicScoringEngine
 )
 from .module3_rubric.adaptive_engine import AttemptLimitReached
@@ -71,9 +72,9 @@ extractor = LLMClaimExtractor()
 pdf_parser = PDFParser()
 harvester = EvidenceHarvesterService()
 passport_svc = PassportService()
-quiz_engine = QuestionBankEngine()
 adaptive_engine = AdaptiveAssessmentEngine(storage_dir=".sessions")
 defend = DefendYourCode(sandbox=adaptive_engine.sandbox)
+cert_store = CertificateStore()
 quiz_attempts = QuizAttemptStore()
 jobs = JobManager()
 # Each analysis clones and blames repositories, so they are limited per client address
@@ -199,10 +200,15 @@ def discover_user_repos(req: DiscoverReposRequest):
 
 @app.post("/api/upload-cert", response_model=CertificateEvidence)
 async def upload_certificate(file: UploadFile = File(...), candidate_name: Optional[str] = None):
-    """Parse an uploaded certificate PDF or image, extracting issuer, credential ID, skills, and confidence."""
+    """
+    Parse and verify an uploaded certificate PDF or image. The result is kept on the server: an analysis
+    accepts certificates only by the id returned here, never the details a client sends back.
+    """
     contents = await file.read()
     parser = CertificateParser()
-    return parser.parse_file(file.filename or "certificate", contents, candidate_name)
+    cert = parser.parse_file(file.filename or "certificate", contents, candidate_name)
+    cert_store.put(cert)
+    return cert
 
 
 # --- Unified End-to-End Analysis Pipeline ---
@@ -255,9 +261,20 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
     if profile_info:
         claims_doc.github_profile = profile_info.model_dump()
 
-    # Attach uploaded certificates
+    # Certificates count only as this server recorded them at upload, and only for the person they were issued to
+    certificate_notes: List[str] = []
     if req.certificates:
-        claims_doc.certificates = req.certificates
+        certs, unknown = cert_store.resolve(c.id for c in req.certificates)
+        holder = _holder_name(req, claims_doc, has_resume, profile_info)
+        claims_doc.certificates = [check_holder(c, holder) for c in certs]
+        if unknown:
+            certificate_notes.append(
+                f"{len(unknown)} certificate(s) weren't uploaded to this server (or expired after a restart), "
+                "so they were ignored. Upload them again."
+            )
+        for c in claims_doc.certificates:
+            if c.issuer_status == "unverified" and c.mismatch_reason and "different recipient" in c.mismatch_reason:
+                certificate_notes.append(f"Certificate '{c.certificate_name}': {c.mismatch_reason}.")
 
     # No repositories given: fall back to repository links found in the resume itself
     auto_detected = False
@@ -266,6 +283,12 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
         resume_links += pdf_parser.parse_text_or_markdown(req.resume_text)[1]
         repos = _repo_links(resume_links)[:MAX_REPOS]
         auto_detected = bool(repos)
+
+    if not has_resume and not repos and not claims_doc.certificates and not profile_problem:
+        raise JobFailure(
+            " ".join(certificate_notes + ["Nothing to analyse: add a resume, repository URLs, a GitHub username or a certificate."]),
+            400,
+        )
 
     if not repos and profile_problem:
         # The repositories were meant to come from the GitHub profile; don't issue a passport without them
@@ -285,6 +308,7 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
         raise JobFailure(str(exc), 422)
     if auto_detected:
         evidence_doc.warnings.insert(0, f"No repository was entered; analysed repositories linked in the resume: {', '.join(repos)}.")
+    evidence_doc.warnings = certificate_notes + evidence_doc.warnings
 
     # 3. Module 3: 4-State Rubric Engine & Cryptographic Signer
     report("Scoring claims and signing the passport")
@@ -294,6 +318,17 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
     )
     report("Preparing Defend Your Code questions from the candidate's own functions")
     return _attach_defend(passport, functions=evidence_doc.authored_functions)
+
+
+def _holder_name(req: AnalyzeRequest, claims_doc: ClaimsDocument, has_resume: bool, profile_info) -> Optional[str]:
+    """The passport holder's real name, if known: entered, read from the resume, or from the GitHub profile."""
+    if req.candidate_name and req.candidate_name.strip():
+        return req.candidate_name.strip()
+    if has_resume and claims_doc.candidate_name and claims_doc.candidate_name != "Candidate":
+        return claims_doc.candidate_name
+    if profile_info and profile_info.name and profile_info.name != profile_info.username:
+        return profile_info.name
+    return None  # a GitHub username alone isn't a name
 
 
 # --- Defend Your Code: optional questions about the candidate's own functions ---
@@ -468,33 +503,15 @@ def submit_assessment_step(req: TaskSubmissionRequest):
 
 
 # --- Challenge Quiz Engine (Backward-Compatible) ---
-@app.get("/api/quiz/{skill}")
-def get_quiz(skill: str):
-    # Answers and explanations stay on the server until the quiz is submitted
-    questions = quiz_engine.public_questions(skill)
-    if not questions:
-        raise HTTPException(status_code=404, detail=f"No Skill Challenge exists for '{skill}' yet.")
-    return {"skill": skill, "questions": questions}
-
-
-@app.post("/api/quiz/submit", response_model=QuizResult)
-def submit_quiz(sub: QuizSubmission):
-    if not quiz_engine.get_questions_for_skill(sub.skill):
-        raise HTTPException(status_code=404, detail=f"No Skill Challenge exists for '{sub.skill}' yet.")
-    result = quiz_engine.evaluate_quiz(sub.skill, sub.answers)
-    # Remember the graded attempt server-side; the client only gets an id it can redeem once
-    result.attempt_id = quiz_attempts.record(normalize_skill(sub.skill), result.grade, result.percentage)
-    return result
-
-
 @app.post("/api/quiz/apply", response_model=PassportDocument)
 def apply_quiz_grade(req: ApplyQuizRequest):
     """
-    Applies a graded skill challenge (standard or adaptive) to a passport and re-signs it.
+    Applies a finished adaptive assessment to the passport it was taken for and re-signs it.
 
-    Two checks keep this from becoming a way to get arbitrary passports signed:
+    Checks that keep this from becoming a way to get arbitrary passports signed:
     - the passport must carry a valid signature from this server, so it can't have been edited;
-    - the grade comes from the server's record of a submitted quiz (single use), not from the client.
+    - the grade comes from the server's record of a completed assessment (single use), not from the client;
+    - that assessment was started for this passport (attempts per passport are limited).
     Only the challenged skill's grade and points change: Evidence x Grade Weight + Consistency Bonus (max 100).
     An assessment grade can boost CLAIMED_ONLY or PARTIALLY_SUPPORTED points, but can never override CONTRADICTED.
     """
@@ -507,7 +524,9 @@ def apply_quiz_grade(req: ApplyQuizRequest):
     if attempt is None:
         raise HTTPException(status_code=400, detail="Unknown, expired or already used quiz attempt. Take the challenge again.")
 
-    if attempt.passport_key and attempt.passport_key != _passport_key(passport):
+    if not attempt.passport_key:
+        raise HTTPException(status_code=400, detail="Only an assessment taken for this passport can be applied to it.")
+    if attempt.passport_key != _passport_key(passport):
         raise HTTPException(status_code=400, detail="This assessment was taken for a different passport.")
 
     target_skill = attempt.skill.lower()

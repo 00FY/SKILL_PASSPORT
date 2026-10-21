@@ -295,7 +295,7 @@ def test_apply_assessment_updates_passport_and_respects_contradicted():
     assert "T2(Pass)->T3(Pass)" in adaptive_trace["rule_applied"]
 
     # 2. Security test: Apply Grade A to CONTRADICTED skill
-    fa_attempt = quiz_attempts.record("FastAPI", "A", 100.0)
+    fa_attempt = quiz_attempts.record("FastAPI", "A", 100.0, passport_key="pp_test_apply")
     apply_fa = client.post("/api/quiz/apply", json={
         "passport": updated_p,
         "attempt_id": fa_attempt,

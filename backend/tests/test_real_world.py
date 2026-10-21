@@ -447,22 +447,37 @@ def test_simulator_recomputes_from_formulas():
 
 
 def test_quiz_never_falls_back_to_another_skill():
-    assert client.get("/api/quiz/Java").status_code == 404
-    assert client.post("/api/quiz/submit", json={"skill": "Java", "answers": {}}).status_code == 404
-    assert len(client.get("/api/quiz/python").json()["questions"]) == 15
+    from app.module3_rubric import QuestionBankEngine
+    bank = QuestionBankEngine()
+    assert bank.public_questions("Java") == []
+    assert len(bank.public_questions("python")) == 15
+
+
+def test_old_unlimited_quiz_endpoints_are_gone():
+    # They revealed answers after each submit and allowed endless retries; the app uses the adaptive assessment
+    assert client.get("/api/quiz/Python").status_code in (404, 405)
+    assert client.post("/api/quiz/submit", json={"skill": "Python", "answers": {}}).status_code in (404, 405)
+
+
+def test_apply_refuses_attempts_not_taken_for_a_passport():
+    from app.main import quiz_attempts
+    jordan = client.get("/api/demo/jordan").json()
+    unbound = quiz_attempts.record("Python", "A", 100.0)
+    res = client.post("/api/quiz/apply", json={"passport": jordan, "attempt_id": unbound})
+    assert res.status_code == 400 and "taken for this passport" in res.json()["detail"]
 
 
 def test_quiz_for_fastapi_and_applying_grade_updates_passport():
+    from app.module3_rubric import QuestionBankEngine
+    bank = QuestionBankEngine()
     # 1. FastAPI has dedicated technical challenge questions
-    res = client.get("/api/quiz/FastAPI")
-    assert res.status_code == 200
-    questions = res.json()["questions"]
+    questions = bank.public_questions("FastAPI")
     assert len(questions) == 15
-    assert any("Pydantic" in q["question"] or "Pydantic" in q["options"] for q in questions)
+    assert any("Pydantic" in q.question or "Pydantic" in q.options for q in questions)
 
     # 2. Supported languages and frameworks have challenge questions
     for skill in ["JavaScript", "TypeScript", "React", "SQL", "Git"]:
-        assert len(client.get(f"/api/quiz/{skill}").json()["questions"]) == 15
+        assert len(bank.public_questions(skill)) == 15
 
     # 3. Apply quiz grade updates the passport's final points and signature
     priya_passport = client.get("/api/demo/priya").json()
@@ -471,9 +486,7 @@ def test_quiz_for_fastapi_and_applying_grade_updates_passport():
     previous_points = fastapi_skill["final_points"]
 
     # Earn Grade A by answering the FastAPI challenge correctly (server-side answer key)
-    from app.module3_rubric.question_bank import SAMPLE_QUIZZES
-    answers = {q.id: q.correct_index for q in SAMPLE_QUIZZES["FastAPI"]}
-    result = client.post("/api/quiz/submit", json={"skill": "FastAPI", "answers": answers}).json()
+    result = _earn("FastAPI", passport=priya_passport)
     assert result["grade"] == "A" and result["attempt_id"]
 
     apply_res = client.post("/api/quiz/apply", json={"passport": priya_passport, "attempt_id": result["attempt_id"]})
@@ -532,12 +545,13 @@ def test_demo_passports_are_labelled_and_label_is_signed():
 
 
 def test_quiz_review_only_after_submission():
-    questions = client.get("/api/quiz/Docker").json()["questions"]
+    from app.module3_rubric import QuestionBankEngine
+    bank = QuestionBankEngine()
+    questions = [q.model_dump() for q in bank.public_questions("Docker")]
     assert questions and all(set(q) == {"id", "skill", "difficulty", "question", "options"} for q in questions)
-    result = client.post("/api/quiz/submit", json={"skill": "Docker", "answers": {questions[0]["id"]: 0}}).json()
-    review = {r["id"]: r for r in result["review"]}
-    assert review[questions[0]["id"]]["chosen_index"] == 0
-    assert all("correct_index" in r for r in result["review"])
+    result = bank.evaluate_quiz("Docker", {questions[0]["id"]: 0})
+    review = {r.id: r for r in result.review}
+    assert review[questions[0]["id"]].chosen_index == 0
 
 
 # --- Background jobs ---------------------------------------------------------------------------
@@ -634,10 +648,16 @@ def test_github_rate_limit_becomes_a_warning(username_repo):
 
 # --- Skill challenge integrity -----------------------------------------------------------------
 
-def _earn(skill, correct=True):
+def _earn(skill, correct=True, passport=None):
+    """Grades a quiz on the server and records the attempt for `passport`, as a finished assessment would."""
+    from app.main import quiz_attempts
+    from app.module3_rubric import QuestionBankEngine
     from app.module3_rubric.question_bank import SAMPLE_QUIZZES
     answers = {q.id: (q.correct_index if correct else (q.correct_index + 1) % len(q.options)) for q in SAMPLE_QUIZZES[skill]}
-    return client.post("/api/quiz/submit", json={"skill": skill, "answers": answers}).json()
+    result = QuestionBankEngine().evaluate_quiz(skill, answers)
+    key = (passport or {}).get("passport_id") or (passport or {}).get("tamper_proof_hash")
+    attempt_id = quiz_attempts.record(skill, result.grade, result.percentage, passport_key=key)
+    return {"grade": result.grade, "attempt_id": attempt_id}
 
 
 def test_quiz_apply_rejects_edited_passports():
@@ -646,7 +666,7 @@ def test_quiz_apply_rejects_edited_passports():
     forged.update(evidence_source="harvested", candidate_name="Mallory", overall_score=99, refusal_panel=[])
     for s in forged["skills"]:
         s.update(verdict="VERIFIED", evidence_score=10, final_points=100)
-    attempt = _earn("Python")["attempt_id"]
+    attempt = _earn("Python", passport=forged)["attempt_id"]
     res = client.post("/api/quiz/apply", json={"passport": forged, "attempt_id": attempt})
     assert res.status_code == 400 and "signature" in res.json()["detail"]
 
@@ -662,7 +682,7 @@ def test_quiz_apply_needs_a_real_attempt():
 
 def test_quiz_attempt_is_single_use_and_grade_is_the_earned_one():
     jordan = client.get("/api/demo/jordan").json()
-    poor = _earn("Python", correct=False)
+    poor = _earn("Python", correct=False, passport=jordan)
     assert poor["grade"] == "E"
     first = client.post("/api/quiz/apply", json={"passport": jordan, "attempt_id": poor["attempt_id"]})
     assert first.status_code == 200
@@ -674,10 +694,10 @@ def test_quiz_attempt_is_single_use_and_grade_is_the_earned_one():
 
 def test_quiz_apply_rejects_skill_not_in_passport_and_contradicted_skills():
     jordan = client.get("/api/demo/jordan").json()
-    res = client.post("/api/quiz/apply", json={"passport": jordan, "attempt_id": _earn("React")["attempt_id"]})
+    res = client.post("/api/quiz/apply", json={"passport": jordan, "attempt_id": _earn("React", passport=jordan)["attempt_id"]})
     assert res.status_code == 404
     alex = client.get("/api/demo/alex").json()
-    res = client.post("/api/quiz/apply", json={"passport": alex, "attempt_id": _earn("Python")["attempt_id"]})
+    res = client.post("/api/quiz/apply", json={"passport": alex, "attempt_id": _earn("Python", passport=alex)["attempt_id"]})
     assert res.status_code == 409
 
 
