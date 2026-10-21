@@ -117,6 +117,7 @@ export interface PassportDocument {
   certificates?: CertificateEvidence[];
   tamper_proof_hash: string;
   issued_at: string;
+  passport_id?: string | null;
   audit_log?: RunAuditLog | null;
 }
 
@@ -181,8 +182,6 @@ export interface TaskSubmissionRequest {
 export interface TestCaseResult {
   test_case: number;
   passed: boolean;
-  expected?: any;
-  actual?: any;
   error?: string;
 }
 

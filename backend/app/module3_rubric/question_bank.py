@@ -1542,6 +1542,8 @@ class QuizAttempt:
     grade: str
     percentage: float
     created_at: float = field(default_factory=time.time)
+    passport_key: Optional[str] = None  # Set for adaptive assessments: the passport it was started for
+    trajectory: Optional[str] = None
 
 
 class QuizAttemptStore:
@@ -1556,11 +1558,14 @@ class QuizAttemptStore:
         self._attempts: Dict[str, QuizAttempt] = {}
         self._lock = threading.Lock()
 
-    def record(self, skill: str, grade: str, percentage: float) -> str:
+    def record(self, skill: str, grade: str, percentage: float,
+               passport_key: Optional[str] = None, trajectory: Optional[str] = None) -> str:
         attempt_id = secrets.token_urlsafe(16)
         with self._lock:
             self._purge()
-            self._attempts[attempt_id] = QuizAttempt(skill=skill, grade=grade, percentage=percentage)
+            self._attempts[attempt_id] = QuizAttempt(
+                skill=skill, grade=grade, percentage=percentage, passport_key=passport_key, trajectory=trajectory
+            )
         return attempt_id
 
     def get(self, attempt_id: str) -> Optional[QuizAttempt]:

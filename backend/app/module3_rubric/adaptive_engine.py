@@ -1,8 +1,9 @@
 import os
+import re
 import json
 import ast
-import uuid
-import concurrent.futures
+import secrets
+import threading
 from typing import Dict, Any, List, Optional
 from ..schemas import (
     StageType, DifficultyTier, PublicTaskItem,
@@ -10,6 +11,8 @@ from ..schemas import (
 )
 from .question_bank import ADAPTIVE_QUESTION_BANK, get_adaptive_tasks_for_skill, generate_generic_adaptive_tasks
 from ..module1_extractor.injection_guard import PromptInjectionDefense
+from .sandbox import CodeSandbox, SandboxUnavailable
+from ..skills import normalize_skill
 
 BANNED_AST_NAMES = {
     "os", "sys", "subprocess", "socket", "shutil", "pathlib", "open", "eval", "exec", "__import__",
@@ -18,37 +21,13 @@ BANNED_AST_NAMES = {
 BANNED_ATTRIBUTES = {"__subclasses__", "__globals__", "__code__", "__builtins__"}
 STAGE_SEQUENCE = [StageType.COMPREHENSION, StageType.DEBUGGING, StageType.CODING, StageType.REASONING]
 DIFFICULTY_WEIGHTS = {1: 1.0, 2: 1.5, 3: 2.2}
-MAX_LOOP_ITERATIONS = 200_000
+# Session ids are generated here and only ever used in this exact shape, including as file names
+SESSION_ID_RE = re.compile(r"^asmt_[0-9a-f]{32}$")
+MAX_ATTEMPTS_PER_SKILL = int(os.getenv("SKILL_PASSPORT_ASSESSMENT_ATTEMPTS", "2"))
 
 
-class LoopLimiter(ast.NodeTransformer):
-    """
-    Injects an iteration counter check into every loop body (while, for)
-    to terminate runaway/infinite loops in-thread without hanging worker threads.
-    """
-    def visit_For(self, node):
-        self.generic_visit(node)
-        check_call = ast.Expr(
-            value=ast.Call(
-                func=ast.Name(id="__check_loop_iter__", ctx=ast.Load()),
-                args=[],
-                keywords=[]
-            )
-        )
-        node.body.insert(0, check_call)
-        return node
-
-    def visit_While(self, node):
-        self.generic_visit(node)
-        check_call = ast.Expr(
-            value=ast.Call(
-                func=ast.Name(id="__check_loop_iter__", ctx=ast.Load()),
-                args=[],
-                keywords=[]
-            )
-        )
-        node.body.insert(0, check_call)
-        return node
+class AttemptLimitReached(ValueError):
+    pass
 
 
 class AdaptiveAssessmentEngine:
@@ -57,12 +36,19 @@ class AdaptiveAssessmentEngine:
     AST-sandboxed test execution, and deterministic rubric evaluations.
     """
 
-    def __init__(self, storage_dir: Optional[str] = None):
+    def __init__(self, storage_dir: Optional[str] = None, sandbox: Optional[CodeSandbox] = None):
         self.storage_dir = storage_dir
+        self.sandbox = sandbox or CodeSandbox()
+        self.max_attempts = MAX_ATTEMPTS_PER_SKILL
+        # (passport key, skill) -> sessions started; in memory, like the quiz attempt store
+        self._attempts: Dict[tuple, int] = {}
+        self._lock = threading.Lock()
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.injection_guard = PromptInjectionDefense()
 
     def _get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        if not isinstance(session_id, str) or not SESSION_ID_RE.match(session_id):
+            return None
         if session_id in self.sessions:
             return self.sessions[session_id]
         if self.storage_dir:
@@ -81,7 +67,7 @@ class AdaptiveAssessmentEngine:
         return None
 
     def _save_session(self, session_id: str) -> None:
-        if not self.storage_dir:
+        if not self.storage_dir or not SESSION_ID_RE.match(session_id):
             return
         session = self.sessions.get(session_id)
         if not session:
@@ -104,7 +90,17 @@ class AdaptiveAssessmentEngine:
         passport_hash: str = "",
         initial_verdict: Optional[str] = None
     ) -> Dict[str, Any]:
-        session_id = f"asmt_{uuid.uuid4().hex[:12]}"
+        if passport_hash:
+            key = (passport_hash, normalize_skill(skill).lower())
+            with self._lock:
+                used = self._attempts.get(key, 0)
+                if used >= self.max_attempts:
+                    raise AttemptLimitReached(
+                        f"The {skill} assessment can be taken {self.max_attempts} times per passport; "
+                        "all attempts are used."
+                    )
+                self._attempts[key] = used + 1
+        session_id = f"asmt_{secrets.token_hex(16)}"
 
         # Repo-Seeded Starting Difficulty
         if initial_verdict == "CLAIMED_ONLY":
@@ -123,6 +119,7 @@ class AdaptiveAssessmentEngine:
             "current_stage_idx": 0,
             "current_difficulty": start_diff,
             "seen_task_ids": {first_task["task_id"]},
+            "current_task_id": first_task["task_id"],
             "history": [],
             "completed": False,
         }
@@ -130,10 +127,22 @@ class AdaptiveAssessmentEngine:
         return {"session_id": session_id, "task": self._to_public(first_task)}
 
     def submit_step(self, req: TaskSubmissionRequest) -> StepEvaluationResult:
-        session = self._get_session(req.session_id)
-        if not session or session["completed"]:
-            raise ValueError("Invalid or already completed assessment session.")
+        with self._lock:
+            session = self._get_session(req.session_id)
+            if not session or session["completed"]:
+                raise ValueError("Invalid or already completed assessment session.")
+            # Only the task this session served last can be answered, and only once
+            if not session.get("current_task_id") or req.task_id != session["current_task_id"]:
+                raise ValueError("This task is not the current step of the assessment.")
+            session["current_task_id"] = None
+        try:
+            return self._grade_step(session, req)
+        except Exception:
+            # Nothing was recorded (e.g. the code runner was busy), so the same step can be submitted again
+            session["current_task_id"] = req.task_id
+            raise
 
+    def _grade_step(self, session: Dict[str, Any], req: TaskSubmissionRequest) -> StepEvaluationResult:
         task = self._get_task_by_id(session["skill"], req.task_id)
         stage_type = StageType(task["stage_type"])
 
@@ -222,6 +231,7 @@ class AdaptiveAssessmentEngine:
             session["skill"], next_stage, next_diff, session["seen_task_ids"]
         )
         session["seen_task_ids"].add(next_task["task_id"])
+        session["current_task_id"] = next_task["task_id"]
         self._save_session(req.session_id)
 
         return StepEvaluationResult(
@@ -254,61 +264,27 @@ class AdaptiveAssessmentEngine:
             if isinstance(node, ast.Attribute) and node.attr in BANNED_ATTRIBUTES:
                 return 0.0, [], f"Security policy: Restricted attribute '{node.attr}' detected."
 
-        # Transform AST to inject loop iteration checks
-        tree = LoopLimiter().visit(tree)
-        ast.fix_missing_locations(tree)
-
-        iter_counter = [0]
-        def check_loop_iter():
-            iter_counter[0] += 1
-            if iter_counter[0] > MAX_LOOP_ITERATIONS:
-                raise RuntimeError("Execution stopped: loop iteration limit exceeded")
-
-        safe_builtins = {
-            "len": len, "range": range, "min": min, "max": max, "sum": sum,
-            "abs": abs, "enumerate": enumerate, "zip": zip, "list": list,
-            "dict": dict, "set": set, "tuple": tuple, "sorted": sorted,
-            "int": int, "str": str, "float": float, "bool": bool,
-            "all": all, "any": any, "round": round, "reversed": reversed,
-            "map": map, "filter": filter,
-            "__check_loop_iter__": check_loop_iter
-        }
-        namespace: Dict[str, Any] = {"__builtins__": safe_builtins}
-        try:
-            exec(compile(tree, filename="<candidate_code>", mode="exec"), namespace)
-        except Exception as e:
-            return 0.0, [], f"Runtime error during definition: {type(e).__name__}: {e}"
-
-        candidate_fn = namespace.get(fn_name)
-        if not callable(candidate_fn):
-            return 0.0, [], f"Function `{fn_name}` was not found or is not callable."
+        # Candidate code only ever runs in a separate sandboxed process (see sandbox.py).
+        # The checks above are an early, readable rejection, not the security boundary.
+        # SandboxUnavailable propagates so the step is not recorded and can be resubmitted
+        run = self.sandbox.run(code, fn_name, [list(t.get("args", [])) for t in tests])
+        if run.definition_error:
+            return 0.0, [], run.definition_error
 
         results = []
         passed_count = 0
-        for idx, t in enumerate(tests, 1):
-            iter_counter[0] = 0
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            try:
-                def run_single():
-                    copied_args = [
-                        arg.copy() if isinstance(arg, (list, dict)) else arg
-                        for arg in t.get("args", [])
-                    ]
-                    return candidate_fn(*copied_args)
-
-                future = executor.submit(run_single)
-                actual = future.result(timeout=2.0)
-
-                ok = (actual == t.get("expected"))
-                if ok:
-                    passed_count += 1
-                results.append({"test_case": idx, "passed": ok, "expected": t.get("expected"), "actual": actual})
-            except concurrent.futures.TimeoutError:
-                results.append({"test_case": idx, "passed": False, "error": "Execution timed out (limit: 2.0s)"})
-            except Exception as e:
-                results.append({"test_case": idx, "passed": False, "error": f"{type(e).__name__}: {e}"})
-            finally:
-                executor.shutdown(wait=False, cancel_futures=True)
+        for idx, (t, entry) in enumerate(zip(tests, run.results), 1):
+            kind = entry.get("kind")
+            if kind == "error":
+                results.append({"test_case": idx, "passed": False, "error": entry.get("error", "Unknown error")})
+                continue
+            ok_value, actual = CodeSandbox.decode(entry)
+            # A value that could not be sent back as JSON (e.g. a set) is shown but never matches
+            ok = ok_value and kind == "json" and actual == t.get("expected")
+            if ok:
+                passed_count += 1
+            # Hidden tests stay hidden: the candidate sees pass/fail, not the expected values
+            results.append({"test_case": idx, "passed": ok})
 
         score = round(passed_count / len(tests), 2) if tests else 0.0
         return score, results, f"Passed {passed_count}/{len(tests)} automated test cases."

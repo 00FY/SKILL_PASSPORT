@@ -226,6 +226,8 @@ class PassportDocument(BaseModel):
     certificates: List[CertificateEvidence] = Field(default_factory=list)
     tamper_proof_hash: str
     issued_at: str
+    # Stable across re-signing, so per-passport limits (e.g. assessment attempts) survive a quiz update
+    passport_id: Optional[str] = None
     audit_log: Optional[RunAuditLog] = None
 
 # --- What-If Simulator Schemas ---
@@ -246,7 +248,7 @@ class ApplyQuizRequest(BaseModel):
     """The grade comes from the server's record of the attempt, never from the client."""
     passport: PassportDocument
     attempt_id: str
-    trajectory: Optional[str] = None
+    trajectory: Optional[str] = None  # Ignored: the server's own record of the attempt is used
 
 
 # --- Outlier-style Adaptive Assessment Schemas ---
@@ -272,9 +274,9 @@ class PublicTaskItem(BaseModel):
     sample_tests: Optional[List[str]] = None     # Visible test assertions for candidate
 
 class StartAssessmentRequest(BaseModel):
+    """An assessment belongs to a signed passport; the starting difficulty comes from that passport's verdict."""
     skill: str
-    passport_hash: Optional[str] = ""
-    initial_verdict: Optional[str] = None
+    passport: PassportDocument
 
 class TaskSubmissionRequest(BaseModel):
     session_id: str
