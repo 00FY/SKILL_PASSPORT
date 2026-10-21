@@ -181,6 +181,8 @@ A general quiz shows someone *knows* Python; it can't show they *wrote* the code
 
 ## 🚀 Quick Start & Local Installation
 
+For public hosting with a GitHub Pages frontend and Render backend, see [Deployment setup](DEPLOYMENT.md).
+
 ### 1. Clone the Repository
 ```bash
 git clone https://github.com/00FY/SKILL_PASSPORT.git

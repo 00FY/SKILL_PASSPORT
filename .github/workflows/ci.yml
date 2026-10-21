@@ -54,3 +54,7 @@ jobs:
       - name: Verify TypeScript & Build
         working-directory: frontend
         run: npm run build
+
+      - name: Test local and hosted API routing
+        working-directory: frontend
+        run: npm test

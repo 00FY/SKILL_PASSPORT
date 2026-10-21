@@ -1,0 +1,64 @@
+name: Deploy frontend to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+    inputs:
+      backend_url:
+        description: 'Public HTTPS Render backend URL (leave blank to use SKILL_PASSPORT_API_URL)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ inputs.backend_url != '' || vars.SKILL_PASSPORT_API_URL != '' }}
+    runs-on: ubuntu-latest
+    env:
+      VITE_API_BASE_URL: ${{ inputs.backend_url || vars.SKILL_PASSPORT_API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Check backend URL
+        run: |
+          node -e "const u = new URL(process.env.VITE_API_BASE_URL); if (u.protocol !== 'https:' || u.pathname !== '/' || u.search || u.hash || u.username || u.password) throw new Error('Set SKILL_PASSPORT_API_URL to the HTTPS origin of the deployed Render API, without /api');"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build for the repository Pages path
+        working-directory: frontend
+        env:
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+        run: npm run build -- --base="/$REPOSITORY_NAME/"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

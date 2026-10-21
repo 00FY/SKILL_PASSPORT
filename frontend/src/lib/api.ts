@@ -13,15 +13,20 @@ const describe = async (res: Response): Promise<string> => {
 
 // Only for private deployments: a key built into the frontend is visible to anyone who loads it
 const API_KEY: string | undefined = import.meta.env.VITE_SKILL_PASSPORT_API_KEY;
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+const apiUrl = (path: string) => `${API_BASE_URL}${path}`;
+const connectionError = () => new ApiError(API_BASE_URL
+  ? 'Could not reach the analysis server. It may be starting up. Please try again in a moment.'
+  : 'Could not reach the backend. Is the API running on port 8000?');
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   const headers = new Headers(init?.headers);
   if (API_KEY) headers.set('X-API-Key', API_KEY);
   try {
-    res = await fetch(path, { ...init, headers });
+    res = await fetch(apiUrl(path), { ...init, headers });
   } catch {
-    throw new ApiError('Could not reach the backend. Is the API running on port 8000?');
+    throw connectionError();
   }
   if (!res.ok) throw new ApiError(await describe(res));
   return res.json() as Promise<T>;
@@ -100,9 +105,9 @@ export async function downloadPassportPdf(passport: { candidate_name: string }):
   if (API_KEY) headers.set('X-API-Key', API_KEY);
   let res: Response;
   try {
-    res = await fetch('/api/report/pdf', { method: 'POST', headers, body: JSON.stringify(passport) });
+    res = await fetch(apiUrl('/api/report/pdf'), { method: 'POST', headers, body: JSON.stringify(passport) });
   } catch {
-    throw new ApiError('Could not reach the backend. Is the API running on port 8000?');
+    throw connectionError();
   }
   if (!res.ok) throw new ApiError(await describe(res));
   const slug = passport.candidate_name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'candidate';

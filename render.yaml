@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: skill-passport-api
+    runtime: docker
+    repo: https://github.com/00FY/SKILL_PASSPORT
+    branch: main
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: SKILL_PASSPORT_HMAC_SECRET
+        generateValue: true
+      - key: SKILL_PASSPORT_CORS_ORIGINS
+        value: https://00fy.github.io
+      - key: SKILL_PASSPORT_WORKERS
+        value: "1"
+      - key: SKILL_PASSPORT_MAX_PENDING_JOBS
+        value: "5"
+      - key: SKILL_PASSPORT_MAX_REPO_MB
+        value: "100"
+      - key: SKILL_PASSPORT_SANDBOX
+        value: process
