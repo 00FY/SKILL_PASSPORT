@@ -130,15 +130,25 @@ def test_short_trivial_and_test_functions_are_skipped():
 
 # --- Building questions ---------------------------------------------------------------------------
 
-def test_questions_have_one_correct_option_matching_the_real_output():
+def test_questions_have_one_correct_option_matching_the_real_code():
     questions, reason = DefendYourCode().build_questions(_functions(), seed="pp_seed")
     assert reason == "" and len(questions) == 3
     namespace = {}
     exec(OWN_FILE, namespace)  # trusted test code: recompute each answer directly
+    source_lines = OWN_FILE.lstrip("\n").split("\n")
+    kinds = set()
     for q in questions:
+        kinds.add(q["kind"])
         assert len(q["options"]) == 4 and len(set(q["options"])) == 4
-        expected = repr(eval(q["call"], namespace))
-        assert q["options"][q["answer_index"]] == expected
+        answer = q["options"][q["answer_index"]]
+        if q["kind"] == "predict":
+            assert answer == repr(eval(q["call"], namespace))
+        elif q["kind"] == "hidden_line":
+            assert "??? (hidden line)" in q["code"] and answer not in q["code"]
+            assert source_lines[q["line"] - 1 + q["hidden_line"]].strip() == answer
+        else:
+            assert answer == q["function"] and q["function"] not in q["code"]
+    assert "predict" in kinds
 
 
 def test_questions_are_deterministic_per_seed():
@@ -147,12 +157,14 @@ def test_questions_are_deterministic_per_seed():
     assert [(q["call"], q["options"]) for q in a] == [(q["call"], q["options"]) for q in b]
 
 
-def test_too_few_runnable_functions_gives_a_reason():
-    uses_import = "import json\n\n\ndef dump(x):\n    out = []\n    for i in x:\n        if i:\n            out.append(json.dumps(i))\n    out.sort()\n    out.reverse()\n    return out\n"
+def test_too_few_functions_gives_a_reason():
+    one_function = "def dump(x):\n    out = []\n    for i in x:\n        if i:\n            out.append(i * 2)\n    out.sort()\n    out.reverse()\n    return out\n"
     questions, reason = DefendYourCode().build_questions(
-        functions_from_source(uses_import, "a.py", None, "r", "c"), seed="s")
+        functions_from_source(one_function, "a.py", None, "r", "c"), seed="s")
     assert questions == []
-    assert "can't run on their own" in reason
+    assert "Only 1 question could be made from your Python functions" in reason
+    _, reason = DefendYourCode().build_questions([], seed="s")
+    assert "No functions" in reason
 
 
 # --- Scoring rules --------------------------------------------------------------------------------
@@ -293,3 +305,153 @@ def test_edited_passport_is_refused():
     p = client.get("/api/demo/jordan").json()
     p["overall_score"] = 99
     assert client.post("/api/defend/start", json={"passport": p}).status_code == 400
+
+
+# --- Any language, any code ------------------------------------------------------------------------
+
+JS_FILE = '''
+import { api } from './api';
+
+export function totalPrice(items, discount) {
+  let total = 0;
+  for (const item of items) {
+    if (item.qty > 0) {
+      total += item.price * item.qty;
+    }
+  }
+  const off = discount > 50 ? 50 : discount;
+  return total * (100 - off) / 100;
+}
+
+export const loadUser = async (id) => {
+  const res = await api.get(`/users/${id}`);
+  if (res.status !== 200) {
+    throw new Error('User not found');
+  }
+  const user = res.data;
+  user.fullName = user.first + ' ' + user.last;
+  return user;
+};
+
+class Cart {
+  removeItem(items, sku) {
+    const kept = [];
+    for (const item of items) {
+      if (item.sku !== sku) {
+        kept.push(item);
+      }
+    }
+    return kept;
+  }
+}
+'''
+
+KOTLIN_FILE = '''
+class Overlay : Service() {
+    override fun onStart(intent: Intent?, flags: Int): Int {
+        val upiId = intent?.getStringExtra("upiId") ?: "Unknown"
+        if (overlayView == null) {
+            showOverlay(upiId)
+        } else {
+            updateOverlay(upiId)
+        }
+        val retries = flags + 1
+        log("started $upiId")
+        return START_STICKY
+    }
+}
+'''
+
+
+def test_brace_languages_and_methods_are_found():
+    js = functions_from_source(JS_FILE.lstrip("\n"), "src/cart.js", None, "r", "c")
+    assert {f["name"] for f in js} == {"totalPrice", "loadUser", "removeItem"}
+    assert all(f["language"] == "JavaScript" and not f["runnable_candidate"] for f in js)
+    kt = functions_from_source(KOTLIN_FILE.lstrip("\n"), "app/Overlay.kt", None, "r", "c")
+    assert [f["name"] for f in kt] == ["onStart"]  # the class line isn't mistaken for a function
+
+
+def test_static_questions_work_without_running_code():
+    fns = functions_from_source(JS_FILE.lstrip("\n"), "src/cart.js", None, "https://github.com/dev/shop", "c" * 40)
+    questions, reason = DefendYourCode().build_questions(fns, seed="js")
+    assert reason == "" and len(questions) == 3
+    assert {q["kind"] for q in questions} <= {"hidden_line", "name"}
+    for q in questions:
+        answer = q["options"][q["answer_index"]]
+        if q["kind"] == "hidden_line":
+            assert answer in JS_FILE and "// ??? (hidden line)" in q["code"]
+            for wrong in q["options"]:
+                # Wrong options change logic, never the text inside string literals
+                assert ("'User not found'" in wrong) == ("'User not found'" in answer)
+
+
+def test_hidden_line_options_are_near_misses_of_the_real_line():
+    from app.module3_rubric.defend_your_code import _mutate_line
+    line = "if (item.qty > 0 && item.price <= limit) {"
+    kinds = {k for k, _ in _mutate_line(line, "item item limit limit qty", "fn")}
+    assert {"compare", "number", "word"} <= kinds
+    texts = [t for _, t in _mutate_line("const msg = 'a > b and c';", "msg msg", "fn")]
+    assert all("'a > b and c'" in t for t in texts)
+
+
+def test_name_question_hides_the_name_and_comments():
+    from app.module3_rubric.defend_your_code import _name_question
+    import random
+    fns = functions_from_source(OWN_FILE.lstrip("\n"), "app/own.py", None, "r", "c")
+    pool = fns + [dict(fns[0], name="load_settings"), dict(fns[0], name="render_page")]
+    q = _name_question(next(f for f in fns if f["name"] == "initials"), pool, random.Random(1))
+    assert "initials" not in q["code"] and "First letter" not in q["code"] and "def ???(" in q["code"]
+    assert q["options"][q["answer_index"]] == "initials"
+
+
+def test_stdlib_imports_can_run_but_other_modules_cannot():
+    uses_stdlib = (
+        "import json\nimport math\n\n\n"
+        "def summary(values: list[int]) -> str:\n"
+        "    clean = []\n"
+        "    for v in values:\n"
+        "        if v >= 0:\n"
+        "            clean.append(v)\n"
+        "    top = max(clean) if clean else 0\n"
+        "    top = top * top\n"
+        "    return json.dumps({'n': len(clean), 'root': math.isqrt(top)})\n"
+    )
+    uses_os = uses_stdlib.replace("import json\n", "import os\nimport json\n").replace("json.dumps(", "os.getcwd() + json.dumps(")
+    fn = functions_from_source(uses_stdlib, "a.py", None, "r", "c")[0]
+    assert fn["import_roots"] == ["json", "math"] and dyc._runnable(fn)
+    q = DefendYourCode()._predict_question(fn, "seed")
+    assert q is not None and q["options"][q["answer_index"]].startswith("'{\"n\":")
+    blocked = functions_from_source(uses_os, "a.py", None, "r", "c")[0]
+    assert not dyc._runnable(blocked)
+
+
+def test_copies_of_the_same_function_count_once():
+    fns = _functions()
+    copies = [dict(f, repo_url="https://github.com/dev/app-copy") for f in fns]
+    questions, _ = DefendYourCode().build_questions(fns + copies, seed="dup")
+    assert len({q["function"] for q in questions}) == len(questions)
+
+
+def test_every_language_skill_gets_its_own_check(tmp_path):
+    from app.main import _attach_defend
+    from app.schemas import PassportDocument, SkillPassportItem, VerdictEnum
+    js = functions_from_source(JS_FILE.lstrip("\n"), "src/cart.js", None, "r", "c")
+    py = _functions()
+    passport = PassportDocument(
+        candidate_name="Dev", applied_role="Engineer", role_match_pct=50, overall_score=50,
+        skills=[
+            SkillPassportItem(name="JavaScript", verdict=VerdictEnum.VERIFIED, evidence_score=7, test_grade="B", final_points=56),
+            SkillPassportItem(name="Python", verdict=VerdictEnum.PARTIALLY_SUPPORTED, evidence_score=7, test_grade="B", final_points=56),
+            SkillPassportItem(name="Go", verdict=VerdictEnum.VERIFIED, evidence_score=7, test_grade="B", final_points=56),
+            SkillPassportItem(name="React", verdict=VerdictEnum.VERIFIED, evidence_score=7, test_grade="B", final_points=56),
+        ],
+        refusal_panel=[], learning_plan=[], security_alerts=[], tamper_proof_hash="", issued_at="2026-01-01",
+        passport_id="pp_multi_language",
+    )
+    passport = _attach_defend(passport, functions=js + py)
+    checks = {s.name: s.authorship_check for s in passport.skills}
+    assert checks["JavaScript"].status == "available"
+    assert checks["Python"].status == "available"
+    assert checks["Go"].status == "unavailable" and "No Go functions" in checks["Go"].reason
+    assert checks["React"] is None  # frameworks are covered through their language
+    assert CryptoSigner.verify_passport_signature(passport.model_dump(mode="json"), passport.tamper_proof_hash)["valid"]

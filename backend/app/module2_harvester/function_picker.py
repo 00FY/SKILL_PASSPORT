@@ -1,35 +1,72 @@
 """
-Finds Python functions the candidate wrote, for "Defend Your Code" questions.
+Finds functions the candidate wrote, for "Defend Your Code" questions.
 
-Selection is static (AST + blame line ownership). Whether a function can actually run on its own is
-decided later, in the sandbox, by module3_rubric/defend_your_code.py.
+Selection is static (blame line ownership + parsing): Python through its AST, brace languages (JavaScript,
+TypeScript, Java, Go, C#, Kotlin, Rust, C/C++, PHP, Swift, Dart, Scala) through function-header patterns
+and brace matching. Every picked function can be asked about statically (a hidden line, its name); Python
+functions that can run on their own also carry what the sandbox needs to ask what a call returns.
 """
 import ast
+import copy
 import os
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+from .constants import CODE_EXTENSIONS
 
 MIN_FUNCTION_LINES = 8
 MAX_FUNCTION_LINES = 60
 MIN_OWNERSHIP = 0.6
-MAX_PER_REPO = 8
+MAX_PER_REPO = 25
 MAX_FILE_BYTES = 200_000
 MAX_CONSTANT_LINES = 400
 MAX_CONSTANT_CHARS = 40_000
 MAX_LITERALS = 6
+
+BRACE_LANGUAGES = {"JavaScript", "TypeScript", "Java", "Kotlin", "Go", "Rust", "C", "C++", "C#", "Swift", "PHP",
+                   "Scala", "Dart"}
+QUIZ_LANGUAGES = BRACE_LANGUAGES | {"Python"}
+
 LOGIC_NODES = (ast.If, ast.For, ast.While, ast.Try, ast.ListComp, ast.DictComp, ast.SetComp,
                ast.GeneratorExp, ast.BoolOp, ast.IfExp)
-DISALLOWED_NODES = (ast.Global, ast.Nonlocal, ast.Yield, ast.YieldFrom, ast.Await, ast.Import, ast.ImportFrom,
-                    ast.AsyncFunctionDef, ast.ClassDef)
+# Constructs that keep a function from running on its own in the sandbox (it can still be asked about)
+NOT_RUNNABLE_NODES = (ast.Global, ast.Nonlocal, ast.Yield, ast.YieldFrom, ast.Await, ast.Import, ast.ImportFrom,
+                      ast.AsyncFunctionDef, ast.ClassDef)
+NONDETERMINISTIC_CALLS = {"now", "today", "utcnow", "time", "random", "randint", "choice", "shuffle", "uuid4",
+                          "perf_counter", "monotonic", "getenv", "input"}
+BRACE_LOGIC_RE = re.compile(r"\b(if|for|while|switch|case|catch|foreach|match|when)\b|\?|&&|\|\||=>")
+BRACE_KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "else", "do", "try", "function", "new",
+                  "typeof", "sizeof", "await", "yield", "using", "lock", "foreach", "when", "match",
+                  "synchronized", "with", "elif", "case", "throw", "delete", "in", "of"}
+TYPE_DECLARATION_RE = re.compile(r"^\s*(?:[\w@]+\s+)*(?:class|interface|object|struct|enum|record|trait|impl|"
+                                 r"namespace|module|extension|protocol|mixin)\b")
+HEADER_PATTERNS = [
+    re.compile(r"\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\("),                    # JS, TS, PHP
+    re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?"
+               r"(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::\s*[^=]+?)?=>\s*\{"),                         # arrow functions
+    re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*[\[(<]"),                           # Go, Swift
+    re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*[<(]"),                                                  # Rust
+    re.compile(r"\bfun\s+(?:<[^>]*>\s*)?(?:[\w.]+\.)?([A-Za-z_]\w*)\s*\("),                       # Kotlin
+    re.compile(r"^\s*(?:override\s+)?def\s+([A-Za-z_]\w*)\s*[\[(]"),                              # Scala
+    re.compile(r"^\s*(?:(?:public|private|protected|internal|static|final|abstract|override|virtual|async|"
+               r"export|default|readonly|synchronized|inline|constexpr|unsafe|extern|const)\s+)*"
+               r"(?:[\w<>\[\]?,.*&:]+\s+)*([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?::\s*[^{;=]+)?"
+               r"(?:throws\s+[\w.,\s]+)?\s*\{\s*$"),                                              # methods
+]
 
 
 def _is_test_or_generated(rel_path: str) -> bool:
     parts = rel_path.replace("\\", "/").lower().split("/")
     name = parts[-1]
+    stem = name.rsplit(".", 1)[0]
     return (
-        name.startswith("test_") or name.endswith("_test.py") or name in ("conftest.py", "setup.py", "manage.py")
-        or any(p in ("tests", "test", "migrations", "alembic") for p in parts[:-1])
+        name.startswith("test_") or stem.endswith(("_test", ".test", ".spec", "test", "tests", "_spec"))
+        or name in ("conftest.py", "setup.py", "manage.py")
+        or any(p in ("tests", "test", "__tests__", "spec", "migrations", "alembic") for p in parts[:-1])
     )
 
+
+# --- Python ------------------------------------------------------------------------------------------------
 
 class _StripAnnotations(ast.NodeTransformer):
     """Type hints don't change what a function returns, and their names may not exist in the sandbox."""
@@ -48,7 +85,6 @@ class _StripAnnotations(ast.NodeTransformer):
 
 
 def strip_annotations(fn: ast.FunctionDef) -> ast.FunctionDef:
-    import copy
     return ast.fix_missing_locations(_StripAnnotations().visit(copy.deepcopy(fn)))
 
 
@@ -110,10 +146,11 @@ def _literals(nodes: List[ast.AST]) -> Dict[str, List[Any]]:
     return {"str": strings[:MAX_LITERALS], "int": ints[:MAX_LITERALS]}
 
 
-def _module_context(tree: ast.Module, lines: List[str]):
-    """Literal module constants and top-level functions, by name, so helpers can travel with a function."""
+def _module_context(tree: ast.Module):
+    """Literal module constants, top-level functions and imports by name, so they can travel with a function."""
     constants: Dict[str, str] = {}
     functions: Dict[str, ast.FunctionDef] = {}
+    imports: Dict[str, Tuple[str, str]] = {}  # bound name -> (top-level module, import statement)
     for node in tree.body:
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -129,12 +166,26 @@ def _module_context(tree: ast.Module, lines: List[str]):
                 constants[targets[0].id] = text
         elif isinstance(node, ast.FunctionDef) and not node.decorator_list:
             functions[node.name] = node
-    return constants, functions
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                stmt = f"import {alias.name}" + (f" as {alias.asname}" if alias.asname else "")
+                imports[bound] = (alias.name.split(".")[0], stmt)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                bound = alias.asname or alias.name
+                stmt = f"from {node.module} import {alias.name}" + (f" as {alias.asname}" if alias.asname else "")
+                imports[bound] = (node.module.split(".")[0], stmt)
+    return constants, functions, imports
 
 
-def _resolve(fn: ast.FunctionDef, constants: Dict[str, str], functions: Dict[str, ast.FunctionDef]):
-    """Returns (context definitions in dependency order, names still unresolved)."""
+def _resolve(fn: ast.FunctionDef, constants, functions, imports):
+    """Returns (import statements, context definitions in dependency order, imported roots, unresolved names)."""
     context: List[str] = []
+    import_stmts: List[str] = []
+    roots: List[str] = []
     seen = {fn.name}
     unresolved = set()
 
@@ -145,9 +196,14 @@ def _resolve(fn: ast.FunctionDef, constants: Dict[str, str], functions: Dict[str
             seen.add(name)
             if name in constants:
                 context.append(constants[name])
+            elif name in imports:
+                root, stmt = imports[name]
+                import_stmts.append(stmt)
+                if root not in roots:
+                    roots.append(root)
             elif name in functions and depth < 2:
                 helper = functions[name]
-                if any(isinstance(n, DISALLOWED_NODES) for n in ast.walk(helper)):
+                if any(isinstance(n, NOT_RUNNABLE_NODES) for n in ast.walk(helper)):
                     unresolved.add(name)
                     continue
                 visit(helper, depth + 1)
@@ -156,7 +212,7 @@ def _resolve(fn: ast.FunctionDef, constants: Dict[str, str], functions: Dict[str
                 unresolved.add(name)
 
     visit(fn, 0)
-    return context, sorted(unresolved)
+    return import_stmts, context, roots, sorted(unresolved)
 
 
 def _param_info(fn: ast.FunctionDef, constants: Optional[Dict[str, str]] = None) -> Optional[List[Dict[str, Any]]]:
@@ -182,13 +238,202 @@ def _param_info(fn: ast.FunctionDef, constants: Optional[Dict[str, str]] = None)
     return params
 
 
+def _unsafe_to_run(fn: ast.FunctionDef) -> bool:
+    """Dunder access or time/randomness: never run (dunders) or no single right answer (time, randomness)."""
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Attribute) and (node.attr.startswith("__") or node.attr in NONDETERMINISTIC_CALLS):
+            return True
+        if isinstance(node, ast.Name) and node.id.startswith("__"):
+            return True
+    return False
+
+
+def _python_functions(source: str, rel_path: str, owned: Optional[set], repo_url: str, commit: str):
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return []
+    lines = source.splitlines()
+    constants, functions, imports = _module_context(tree)
+
+    candidates: List[Tuple[ast.FunctionDef, bool]] = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            candidates.append((node, True))
+        elif isinstance(node, ast.ClassDef):
+            candidates += [(n, False) for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+    picked: List[Dict[str, Any]] = []
+    for node, top_level in candidates:
+        start, end = node.lineno, node.end_lineno or node.lineno
+        if node.decorator_list:
+            start = min(d.lineno for d in node.decorator_list)
+        entry = _common_entry(lines, start, end, owned, rel_path, repo_url, commit, node.name, "Python")
+        if entry is None:
+            continue
+        walked = list(ast.walk(node))
+        if not any(isinstance(n, LOGIC_NODES) for n in walked):
+            continue
+        # Signature (and decorators) up to the first body statement; the docstring, if any
+        body_first = node.body[0]
+        doc_lines: List[int] = []
+        if isinstance(body_first, ast.Expr) and isinstance(getattr(body_first, "value", None), ast.Constant) \
+                and isinstance(body_first.value.value, str):
+            doc_lines = list(range(body_first.lineno - start, (body_first.end_lineno or body_first.lineno) - start + 1))
+        entry["header_lines"] = max(1, body_first.lineno - start)
+        entry["doc_lines"] = doc_lines
+
+        params = _param_info(node, constants) if top_level and isinstance(node, ast.FunctionDef) else None
+        runnable = (
+            params is not None and not node.decorator_list
+            and not any(isinstance(n, NOT_RUNNABLE_NODES) for n in walked)
+            and any(isinstance(n, ast.Return) and n.value is not None for n in walked)
+            and not _unsafe_to_run(node)
+        )
+        entry["runnable_candidate"] = runnable
+        if runnable:
+            for p in params:
+                keys = _dict_keys_read(node, p["name"])
+                if keys:
+                    p["dict_keys"] = keys
+            import_stmts, context, roots, unresolved = _resolve(node, constants, functions, imports)
+            entry.update({
+                "context": context,
+                "exec_source": "\n\n".join(import_stmts + context + [ast.unparse(strip_annotations(node))]),
+                "params": params,
+                "free_names": unresolved,
+                "import_roots": roots,
+                "literals": _literals([node] + [ast.parse(c) for c in context]),
+            })
+        picked.append(entry)
+    return picked
+
+
+# --- Brace languages ---------------------------------------------------------------------------------------
+
+def _match_braces(lines: List[str], line_idx: int, col: int) -> Optional[int]:
+    """Index of the line holding the brace that closes the one at (line_idx, col); skips strings and comments."""
+    depth = 0
+    in_block_comment = False
+    for i in range(line_idx, min(len(lines), line_idx + MAX_FUNCTION_LINES * 2)):
+        text = lines[i]
+        j = col if i == line_idx else 0
+        quote = None
+        while j < len(text):
+            ch = text[j]
+            nxt = text[j + 1] if j + 1 < len(text) else ""
+            if in_block_comment:
+                if ch == "*" and nxt == "/":
+                    in_block_comment = False
+                    j += 1
+            elif quote:
+                if ch == "\\":
+                    j += 1
+                elif ch == quote:
+                    quote = None
+            elif ch == "/" and nxt == "/":
+                break
+            elif ch == "/" and nxt == "*":
+                in_block_comment = True
+                j += 1
+            elif ch in "\"'`":
+                quote = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+            j += 1
+    return None
+
+
+def _brace_functions(source: str, rel_path: str, owned: Optional[set], repo_url: str, commit: str, language: str):
+    lines = source.splitlines()
+    picked: List[Dict[str, Any]] = []
+    i = 0
+    while i < len(lines):
+        text = lines[i]
+        name = None
+        for pattern in HEADER_PATTERNS:
+            m = pattern.search(text)
+            if m and m.group(1) not in BRACE_KEYWORDS:
+                name = m.group(1)
+                break
+        if not name or text.lstrip().startswith(("//", "*", "/*", "#", "}")) or TYPE_DECLARATION_RE.match(text):
+            i += 1
+            continue
+        # The body's opening brace: on the header line or within the next few lines
+        open_at = None
+        for k in range(i, min(len(lines), i + 4)):
+            col = lines[k].find("{", m.start(1) if k == i else 0)
+            if col >= 0:
+                open_at = (k, col)
+                break
+            if lines[k].rstrip().endswith(";"):
+                break
+        if open_at is None:
+            i += 1
+            continue
+        end = _match_braces(lines, *open_at)
+        if end is None:
+            i += 1
+            continue
+        start = i + 1
+        entry = _common_entry(lines, start, end + 1, owned, rel_path, repo_url, commit, name, language)
+        if entry is not None and BRACE_LOGIC_RE.search("\n".join(lines[open_at[0] + 1:end])):
+            entry["header_lines"] = open_at[0] - i + 1
+            entry["doc_lines"] = []
+            entry["runnable_candidate"] = False
+            picked.append(entry)
+        i = end + 1 if entry is not None else i + 1
+    return picked
+
+
+# --- Shared ------------------------------------------------------------------------------------------------
+
+def _common_entry(lines, start: int, end: int, owned: Optional[set], rel_path: str, repo_url: str, commit: str,
+                  name: str, language: str) -> Optional[Dict[str, Any]]:
+    code_lines = [n for n in range(start, end + 1) if n - 1 < len(lines) and lines[n - 1].strip()]
+    if not MIN_FUNCTION_LINES <= len(code_lines) <= MAX_FUNCTION_LINES:
+        return None
+    ownership = 1.0 if owned is None else sum(1 for n in code_lines if n in owned) / len(code_lines)
+    if ownership < MIN_OWNERSHIP:
+        return None
+    return {
+        "repo_url": repo_url,
+        "commit": commit,
+        "path": rel_path,
+        "name": name,
+        "line": start,
+        "language": language,
+        "source": "\n".join(lines[start - 1:end]),
+        "ownership": round(ownership, 2),
+    }
+
+
+def functions_from_source(source: str, rel_path: str, owned: Optional[set], repo_url: str,
+                          commit: str, language: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Qualifying functions in one file. owned=None treats every line as the candidate's."""
+    language = language or CODE_EXTENSIONS.get(os.path.splitext(rel_path)[1].lower())
+    if language == "Python":
+        return _python_functions(source, rel_path, owned, repo_url, commit)
+    if language in BRACE_LANGUAGES:
+        return _brace_functions(source, rel_path, owned, repo_url, commit, language)
+    return []
+
+
 def pick_functions(repo_path: str, per_file: Dict[str, Dict[str, Any]], repo_url: str,
                    commit: str) -> List[Dict[str, Any]]:
     picked: List[Dict[str, Any]] = []
+    per_language: Dict[str, int] = {}
     for rel_path in sorted(per_file):
         info = per_file[rel_path]
         owned = set(info.get("candidate_lines") or [])
-        if not owned or info.get("lang") != "Python" or _is_test_or_generated(rel_path):
+        language = info.get("lang")
+        if not owned or language not in QUIZ_LANGUAGES or _is_test_or_generated(rel_path):
+            continue
+        if per_language.get(language, 0) >= MAX_PER_REPO:
             continue
         full_path = os.path.join(repo_path, rel_path)
         try:
@@ -198,60 +443,8 @@ def pick_functions(repo_path: str, per_file: Dict[str, Dict[str, Any]], repo_url
                 source = f.read()
         except (OSError, UnicodeDecodeError):
             continue
-        picked.extend(functions_from_source(source, rel_path, owned, repo_url, commit))
-        if len(picked) >= MAX_PER_REPO:
-            return picked[:MAX_PER_REPO]
-    return picked
-
-
-def functions_from_source(source: str, rel_path: str, owned: Optional[set], repo_url: str,
-                          commit: str) -> List[Dict[str, Any]]:
-    """Qualifying top-level functions in one file. owned=None treats every line as the candidate's."""
-    try:
-        tree = ast.parse(source)
-    except (SyntaxError, ValueError):
-        return []
-    lines = source.splitlines()
-    constants, functions = _module_context(tree, lines)
-    picked: List[Dict[str, Any]] = []
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef) or node.decorator_list:
-            continue
-        start, end = node.lineno, node.end_lineno or node.lineno
-        code_lines = [n for n in range(start, end + 1) if lines[n - 1].strip()]
-        if not MIN_FUNCTION_LINES <= len(code_lines) <= MAX_FUNCTION_LINES:
-            continue
-        ownership = 1.0 if owned is None else sum(1 for n in code_lines if n in owned) / len(code_lines)
-        if ownership < MIN_OWNERSHIP:
-            continue
-        walked = list(ast.walk(node))
-        if any(isinstance(n, DISALLOWED_NODES) for n in walked):
-            continue
-        if not any(isinstance(n, LOGIC_NODES) for n in walked):
-            continue
-        if not any(isinstance(n, ast.Return) and n.value is not None for n in walked):
-            continue
-        params = _param_info(node, constants)
-        if params is None:
-            continue
-        for p in params:
-            keys = _dict_keys_read(node, p["name"])
-            if keys:
-                p["dict_keys"] = keys
-        context, unresolved = _resolve(node, constants, functions)
-        literal_sources = [node] + [ast.parse(c) for c in context]
-        picked.append({
-            "repo_url": repo_url,
-            "commit": commit,
-            "path": rel_path,
-            "name": node.name,
-            "line": start,
-            "source": "\n".join(lines[start - 1:end]),
-            "context": context,
-            "exec_source": "\n\n".join(context + [ast.unparse(strip_annotations(node))]),
-            "params": params,
-            "free_names": unresolved,
-            "literals": _literals(literal_sources),
-            "ownership": round(ownership, 2),
-        })
+        found = functions_from_source(source, rel_path, owned, repo_url, commit, language)
+        found = found[:MAX_PER_REPO - per_language.get(language, 0)]
+        per_language[language] = per_language.get(language, 0) + len(found)
+        picked.extend(found)
     return picked

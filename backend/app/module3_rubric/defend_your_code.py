@@ -27,6 +27,17 @@ from .sandbox import CodeSandbox
 from .sandbox_runner import SAFE_BUILTIN_NAMES
 
 QUESTION_COUNT = 5
+MAX_PREDICT = 2
+KIND_PREDICT = "predict"
+KIND_HIDDEN_LINE = "hidden_line"
+KIND_NAME = "name"
+# Standard-library modules a "what does this return?" function may import inside the sandbox.
+# Set SKILL_PASSPORT_DEFEND_STDLIB=0 to allow none (then only self-contained functions are run).
+STDLIB_MODULES = {
+    "math", "json", "re", "datetime", "collections", "itertools", "functools", "string", "statistics",
+    "decimal", "fractions", "operator", "heapq", "bisect", "copy", "textwrap", "unicodedata", "typing",
+    "calendar", "base64", "hashlib",
+}
 MIN_QUESTIONS = int(os.getenv("SKILL_PASSPORT_DEFEND_MIN_QUESTIONS", "3"))
 MAX_FUNCTIONS_TRIED = 12
 TIME_LIMIT_S = 90
@@ -295,39 +306,59 @@ class DefendYourCode:
     # Building questions -------------------------------------------------------------------------
 
     def build_questions(self, functions: List[Dict[str, Any]], seed: str) -> Tuple[List[Dict[str, Any]], str]:
-        """Returns (questions, reason when there are too few)."""
-        usable = [f for f in functions if set(f.get("free_names", [])) <= set(SAFE_BUILTIN_NAMES)]
+        """
+        Questions for one language's functions. Returns (questions, reason when there are too few).
+        Up to MAX_PREDICT "what does this return?" questions (Python code that runs on its own), then
+        "which line is hidden?" and "which function is this?" questions, each from a different function.
+        """
+        language = functions[0]["language"] if functions else ""
         if not functions:
-            return [], "No Python functions of at least 8 lines that you wrote were found."
-        if not usable:
-            return [], "Your functions depend on imports or objects that can't run on their own in the test sandbox."
-        # Spread across files first, then repositories' order
-        by_file: Dict[str, List[Dict[str, Any]]] = {}
-        for f in usable:
-            by_file.setdefault(f"{f['repo_url']}::{f['path']}", []).append(f)
-        ordered = []
-        while any(by_file.values()) and len(ordered) < MAX_FUNCTIONS_TRIED:
-            for key in list(by_file):
-                if by_file[key]:
-                    ordered.append(by_file[key].pop(0))
+            return [], "No functions of at least 8 lines that you wrote were found."
+        rng = random.Random(f"{seed}:{language}")
+        # The same function copied into two folders or repos is one function
+        unique: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for f in functions:
+            unique.setdefault((f["name"], os.path.basename(f["path"].replace("\\", "/"))), f)
+        ordered = _spread_by_file(list(unique.values()), rng)
 
-        questions = []
-        for fn in ordered:
-            q = self._question_for(fn, seed)
+        questions: List[Dict[str, Any]] = []
+        used: set = set()
+
+        runnable = [f for f in ordered if _runnable(f)][:MAX_FUNCTIONS_TRIED]
+        for fn in runnable:
+            if sum(1 for q in questions if q["kind"] == KIND_PREDICT) >= MAX_PREDICT:
+                break
+            q = self._predict_question(fn, seed)
             if q:
                 questions.append(q)
+                used.add(_fn_id(fn))
+
+        builders = [_hidden_line_question, _name_question]
+        turn = 0
+        for fn in ordered:
             if len(questions) >= QUESTION_COUNT:
                 break
-        if len(questions) < MIN_QUESTIONS:
-            return [], (f"Only {len(questions)} of your functions could be run with sample inputs; "
-                        f"at least {MIN_QUESTIONS} are needed for a fair test.")
-        return questions, ""
+            if _fn_id(fn) in used:
+                continue
+            for k in range(len(builders)):
+                q = builders[(turn + k) % len(builders)](fn, ordered, rng)
+                if q:
+                    questions.append(q)
+                    used.add(_fn_id(fn))
+                    turn += 1
+                    break
 
-    def _question_for(self, fn: Dict[str, Any], seed: str) -> Optional[Dict[str, Any]]:
+        if len(questions) < MIN_QUESTIONS:
+            return [], (f"Only {len(questions)} question{'s' if len(questions) != 1 else ''} could be made from "
+                        f"your {language} functions; at least {MIN_QUESTIONS} are needed for a fair test.")
+        rng.shuffle(questions)
+        return questions[:QUESTION_COUNT], ""
+
+    def _predict_question(self, fn: Dict[str, Any], seed: str) -> Optional[Dict[str, Any]]:
         arg_sets = _arg_sets(fn["params"], fn.get("literals"))
         if not arg_sets:
             return None
-        run = self.sandbox.run(fn["exec_source"], fn["name"], arg_sets)
+        run = self.sandbox.run(fn["exec_source"], fn["name"], arg_sets, allowed_modules=_allowed_modules())
         if run.definition_error:
             return None
         outcomes = []
@@ -369,21 +400,8 @@ class DefendYourCode:
             wrong.append("It raises an exception")
         if len(wrong) < 3:
             return None
-        options = [correct] + wrong
-        rng.shuffle(options)
-        return {
-            "question_id": f"q_{secrets.token_hex(6)}",
-            "repo_url": fn["repo_url"],
-            "commit": fn.get("commit", ""),
-            "path": fn["path"],
-            "line": fn["line"],
-            "function": fn["name"],
-            "code": fn["source"],
-            "context": fn.get("context", []),
-            "call": call,
-            "options": options,
-            "answer_index": options.index(correct),
-        }
+        return _question(fn, KIND_PREDICT, "What does this call return?", fn["source"], [correct] + wrong, rng,
+                         call=call, context=fn.get("context", []))
 
     # Pools ---------------------------------------------------------------------------------------
 
@@ -483,7 +501,9 @@ class DefendYourCode:
                 review.append({
                     "path": x["path"],
                     "function": x["function"],
-                    "call": x["call"],
+                    "kind": x.get("kind", KIND_PREDICT),
+                    "prompt": x.get("prompt", ""),
+                    "call": x.get("call", ""),
                     "your_answer": x["options"][a["choice"]] if isinstance(a["choice"], int) and 0 <= a["choice"] < len(x["options"]) else None,
                     "correct_answer": x["options"][x["answer_index"]],
                     "correct": a["correct"],
@@ -513,6 +533,213 @@ class DefendYourCode:
         public = {k: v for k, v in q.items() if k != "answer_index"}
         public["number"] = number
         return public
+
+
+# --- Question helpers ---------------------------------------------------------------------------
+
+def _allowed_modules() -> List[str]:
+    return sorted(STDLIB_MODULES) if os.getenv("SKILL_PASSPORT_DEFEND_STDLIB", "1") != "0" else []
+
+
+def _runnable(fn: Dict[str, Any]) -> bool:
+    return (
+        bool(fn.get("runnable_candidate")) and fn.get("language") == "Python"
+        and set(fn.get("free_names", [])) <= set(SAFE_BUILTIN_NAMES)
+        and set(fn.get("import_roots", [])) <= set(_allowed_modules())
+    )
+
+
+def _fn_id(fn: Dict[str, Any]) -> str:
+    return f"{fn['repo_url']}::{fn['path']}::{fn['name']}::{fn['line']}"
+
+
+def _spread_by_file(functions: List[Dict[str, Any]], rng: random.Random) -> List[Dict[str, Any]]:
+    """Round-robin across files so one big file doesn't supply every question."""
+    by_file: Dict[str, List[Dict[str, Any]]] = {}
+    for f in functions:
+        by_file.setdefault(f"{f['repo_url']}::{f['path']}", []).append(f)
+    keys = sorted(by_file)
+    rng.shuffle(keys)
+    ordered: List[Dict[str, Any]] = []
+    while any(by_file[k] for k in keys):
+        for k in keys:
+            if by_file[k]:
+                ordered.append(by_file[k].pop(0))
+    return ordered
+
+
+def _question(fn, kind, prompt, code, options, rng, call="", context=None, extra=None) -> Dict[str, Any]:
+    correct = options[0]
+    options = list(options)
+    rng.shuffle(options)
+    q = {
+        "question_id": f"q_{secrets.token_hex(6)}",
+        "kind": kind,
+        "prompt": prompt,
+        "language": fn.get("language", ""),
+        "repo_url": fn["repo_url"],
+        "commit": fn.get("commit", ""),
+        "path": fn["path"],
+        "line": fn["line"],
+        "function": fn["name"],
+        "code": code,
+        "context": context or [],
+        "call": call,
+        "options": options,
+        "answer_index": options.index(correct),
+    }
+    q.update(extra or {})
+    return q
+
+
+def _comment(language: str) -> str:
+    return "#" if language == "Python" else "//"
+
+
+# "Which line is hidden?": one meaningful line is replaced; the options are near-misses of it
+CMP_RE = re.compile(r"(?<=\s)(===|!==|==|!=|<=|>=|<|>)(?=\s)")
+CMP_SWAPS = {"<": ["<=", ">"], "<=": ["<", ">="], ">": [">=", "<"], ">=": [">", "<="], "==": ["!="], "!=": ["=="],
+             "===": ["!=="], "!==": ["==="]}
+ARITH_RE = re.compile(r"(?<=\s)([+\-*/])(?=\s)")
+ARITH_SWAPS = {"+": "-", "-": "+", "*": "/", "/": "*"}
+AUG_RE = re.compile(r"(\+=|-=|\*=)")
+NUM_RE = re.compile(r"(?<![\w.])(\d+)(?![\w.])")
+WORD_SWAPS = [(r"\band\b", "or"), (r"\bor\b", "and"), (r"&&", "||"), (r"\|\|", "&&"), (r"\bTrue\b", "False"),
+              (r"\bFalse\b", "True"), (r"\btrue\b", "false"), (r"\bfalse\b", "true"), (r"\bmin\(", "max("),
+              (r"\bmax\(", "min("), (r"\bany\(", "all("), (r"\ball\(", "any("), (r"\.append\(", ".extend("),
+              (r"\.push\(", ".unshift("), (r"\.lower\(", ".upper("), (r"\.upper\(", ".lower("),
+              (r"\.startswith\(", ".endswith("), (r"\.endswith\(", ".startswith("), (r"\.keys\(", ".values("),
+              (r"\.values\(", ".keys("), (r"\.strip\(", ".split("), (r"\.filter\(", ".map("), (r"\.map\(", ".filter("),
+              (r"\bnot\s+", ""), (r"!(?=[A-Za-z_(])", ""), (r"\bbreak\b", "continue"), (r"\bcontinue\b", "break")]
+SKIP_LINE_RE = re.compile(r"^(\}|\{|\)|\]|else\s*:?|try\s*:?|finally\s*:?|pass|break;?|continue;?|return;?|"
+                          r"return None|default:|\};?|\);?|\}\)?;?|else\s*\{|\}\s*else\s*\{)$")
+NESTED_HEADER_RE = re.compile(r"\b(def|fun|function|func|fn)\s+\w+\s*\(")
+IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+COMMON_WORDS = {"if", "else", "elif", "for", "while", "in", "not", "and", "or", "return", "def", "class", "None",
+                "True", "False", "const", "let", "var", "function", "new", "this", "self", "null", "true", "false",
+                "is", "of", "await", "async", "import", "from", "with", "as", "try", "except", "catch", "finally",
+                "int", "str", "len", "range", "print", "string", "number", "boolean", "void", "public", "private",
+                "static", "final", "return", "throw", "raise", "lambda", "yield", "func", "fn", "fun", "val",
+                "export", "default", "override", "protected", "internal", "abstract", "interface", "type", "enum",
+                "extends", "implements", "super", "typeof", "instanceof", "delete", "void", "undefined", "nil",
+                "pub", "mut", "impl", "struct", "match", "when", "object", "companion", "package", "require",
+                "module", "exports", "echo", "global", "nonlocal", "del", "pass", "assert", "with", "elif"}
+STRING_RE = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`")
+
+
+def _mutate_line(line: str, fn_source: str, fn_name: str = "") -> List[Tuple[str, str]]:
+    out: List[Tuple[str, str]] = []
+    # Text inside string literals is never changed: a wrong option should differ in logic, not wording
+    in_string = set()
+    for m in STRING_RE.finditer(line):
+        in_string.update(range(m.start(), m.end()))
+
+    def add(kind, text):
+        if text.strip() != line.strip() and text.strip() and (kind, text) not in out:
+            out.append((kind, text))
+
+    def code_matches(regex):
+        return [m for m in regex.finditer(line) if m.start() not in in_string]
+
+    for m in code_matches(CMP_RE):
+        for alt in CMP_SWAPS[m.group(1)]:
+            add("compare", line[:m.start()] + alt + line[m.end():])
+    for m in code_matches(ARITH_RE):
+        add("arith", line[:m.start()] + ARITH_SWAPS[m.group(1)] + line[m.end():])
+    for m in code_matches(AUG_RE):
+        alt = {"+=": "-=", "-=": "+=", "*=": "+="}[m.group(1)]
+        add("arith", line[:m.start()] + alt + line[m.end():])
+    for m in code_matches(NUM_RE):
+        n = int(m.group(1))
+        for alt in ([n + 1, n - 1] if n > 0 else [n + 1]):
+            add("number", line[:m.start()] + str(alt) + line[m.end():])
+    for pattern, alt in WORD_SWAPS:
+        m = next(iter(code_matches(re.compile(pattern))), None)
+        if m:
+            add("word", line[:m.start()] + alt + line[m.end():])
+    # Swap one variable for another variable the same function uses (lower-case names, used more than once)
+    source_code = STRING_RE.sub('""', fn_source)
+    counts: Dict[str, int] = {}
+    for w in IDENT_RE.findall(source_code):
+        counts[w] = counts.get(w, 0) + 1
+    members = set(re.findall(r"(?:\.|\?\.|::|->)\s*([A-Za-z_]\w*)", source_code))  # attributes and methods
+    variables = [w for w, c in counts.items()
+                 if c >= 2 and len(w) > 1 and w not in COMMON_WORDS and w not in members and w != fn_name
+                 and (w[0].islower() or w[0] == "_")]
+    line_vars = [m for m in IDENT_RE.finditer(line) if m.start() not in in_string and m.group(0) in variables]
+    seen = {m.group(0) for m in line_vars}
+    others = [w for w in variables if w not in seen]
+    for m in line_vars[:3]:
+        prev = line[m.start() - 1] if m.start() > 0 else ""
+        if prev == ".":
+            continue  # an attribute or method name, not a variable
+        for alt in others[:2]:
+            add("name", line[:m.start()] + alt + line[m.end():])
+    return out
+
+
+def _hidden_line_question(fn: Dict[str, Any], pool: List[Dict[str, Any]], rng: random.Random):
+    lines = fn["source"].split("\n")
+    first_body = fn.get("header_lines", 1)
+    last = len(lines) - (0 if fn.get("language") == "Python" else 1)
+    skip = set(fn.get("doc_lines", []))
+    choices = []
+    for idx in range(first_body, last):
+        stripped = lines[idx].strip()
+        if idx in skip or not 12 <= len(stripped) <= 110 or SKIP_LINE_RE.match(stripped):
+            continue
+        if stripped.startswith(("#", "//", "/*", "*", "@", "import ", "from ", "print(", "console.", "logger.", "log.")):
+            continue
+        if NESTED_HEADER_RE.search(stripped):
+            continue  # a nested function's signature says little about understanding
+        mutations = _mutate_line(stripped, fn["source"], fn["name"])
+        if len({t for _, t in mutations}) >= 3:
+            # Lines with comparisons or arithmetic test understanding best
+            weight = 2 if any(k in ("compare", "arith") for k, _ in mutations) else 1
+            choices += [(idx, mutations)] * weight
+    if not choices:
+        return None
+    idx, mutations = rng.choice(choices)
+    original = lines[idx].strip()
+    # One wrong option per kind of change first, so the options differ in different ways
+    by_kind: Dict[str, List[str]] = {}
+    for kind, text in mutations:
+        by_kind.setdefault(kind, []).append(text.strip())
+    kinds = list(by_kind)
+    rng.shuffle(kinds)
+    wrong: List[str] = []
+    while len(wrong) < 3 and any(by_kind.values()):
+        for kind in kinds:
+            if by_kind[kind] and len(wrong) < 3:
+                candidate = by_kind[kind].pop(rng.randrange(len(by_kind[kind])))
+                if candidate not in wrong and candidate != original:
+                    wrong.append(candidate)
+    if len(wrong) < 3:
+        return None
+    indent = lines[idx][:len(lines[idx]) - len(lines[idx].lstrip())]
+    shown = lines[:idx] + [f"{indent}{_comment(fn.get('language', ''))} ??? (hidden line)"] + lines[idx + 1:]
+    return _question(fn, KIND_HIDDEN_LINE, "Which line was hidden from this function?", "\n".join(shown),
+                     [original] + wrong, rng, extra={"hidden_line": idx})
+
+
+def _name_question(fn: Dict[str, Any], pool: List[Dict[str, Any]], rng: random.Random):
+    """"Which of your functions is this?": the body with its name hidden, and four of the candidate's names."""
+    name = fn["name"]
+    others = [f["name"] for f in pool if f["name"].lower() != name.lower() and len(f["name"]) > 2]
+    same_repo = [f["name"] for f in pool if f["repo_url"] == fn["repo_url"] and f["name"] in others]
+    candidates = list(dict.fromkeys(same_repo + others))
+    if len(name) <= 2 or len(candidates) < 3:
+        return None
+    wrong = rng.sample(candidates[:12], 3)
+    skip = set(fn.get("doc_lines", []))
+    shown = []
+    for idx, line in enumerate(fn["source"].split("\n")):
+        stripped = line.strip()
+        if idx in skip or stripped.startswith(("#", "//", "/*", "* ", "*/")) or stripped == "*":
+            continue  # Docstrings and comments would give the name away
+        shown.append(re.sub(rf"\b{re.escape(name)}\b", "???", line))
+    return _question(fn, KIND_NAME, "Which of your functions is this? (its name is hidden)", "\n".join(shown),
+                     [name] + wrong, rng)
 
 
 def outcome_for(correct: int, total: int) -> str:

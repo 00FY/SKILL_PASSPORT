@@ -38,9 +38,14 @@ export interface AuthorshipCheck {
   commits: string[];
 }
 
+export type DefendKind = 'predict' | 'hidden_line' | 'name';
+
 export interface DefendQuestion {
   question_id: string;
   number: number;
+  kind: DefendKind;
+  prompt: string;
+  language: string;
   repo_url: string;
   commit: string;
   path: string;
@@ -62,6 +67,8 @@ export interface DefendStart {
 export interface DefendReviewItem {
   path: string;
   function: string;
+  kind: DefendKind;
+  prompt: string;
   call: string;
   your_answer: string | null;
   correct_answer: string;

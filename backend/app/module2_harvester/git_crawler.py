@@ -95,8 +95,8 @@ class GitBlameAnalyzer:
             total = cand = roots = 0
             best_run, run_start, run_end = (None, 0), None, None
             candidate_months = set()
-            # Python only: which lines are the candidate's, so their own functions can be quizzed later
-            candidate_lines: Optional[List[int]] = [] if lang == "Python" else None
+            # Which lines are the candidate's, so their own functions can be quizzed later
+            candidate_lines: Optional[List[int]] = [] if lang else None
             for line_no, (c_hash, author, email, content) in enumerate(entries, start=1):
                 if not content.strip():
                     continue  # blank lines carry no authorship

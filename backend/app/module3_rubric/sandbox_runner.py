@@ -93,6 +93,16 @@ def _run(request):
     import builtins
     safe = {name: getattr(builtins, name) for name in SAFE_BUILTIN_NAMES}
     safe["__check_loop_iter__"] = check_loop_iter
+    allowed = set(request.get("allowed_modules") or [])
+    if allowed:
+        real_import = builtins.__import__
+
+        def restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if level != 0 or name.split(".")[0] not in allowed:
+                raise ImportError(f"import of '{name}' is not available in the sandbox")
+            return real_import(name, globals, locals, fromlist, level)
+
+        safe["__import__"] = restricted_import
     namespace = {"__builtins__": safe}
     try:
         exec(compile(tree, filename="<candidate_code>", mode="exec"), namespace)

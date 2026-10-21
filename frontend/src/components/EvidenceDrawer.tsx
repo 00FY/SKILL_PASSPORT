@@ -137,7 +137,7 @@ const DefendCard: React.FC<{ skill: SkillPassportItem; onOpen: () => void }> = (
             <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-zinc-300">OPTIONAL</span>
           </p>
           <p className="mt-0.5 text-xs text-zinc-400">
-            {check.status === 'available' && <>Questions about {check.question_count} functions <code>git blame</code> says you wrote. One attempt.</>}
+            {check.status === 'available' && <>{check.question_count} questions about functions <code>git blame</code> says you wrote. One attempt.</>}
             {check.status === 'unavailable' && (check.reason || 'Not enough of your own runnable code was found.')}
             {check.status === 'confirmed' && <>Authorship confirmed: explained {check.correct}/{check.total} of their own functions (+{check.points_effect} points).</>}
             {check.status === 'inconclusive' && <>Explained {check.correct}/{check.total} of their own functions. No change to points.</>}

@@ -37,7 +37,7 @@ from .module3_rubric.defend_your_code import (
     DefendYourCode, adjust_points, STATUS_AVAILABLE, STATUS_UNAVAILABLE, STATUS_CONFIRMED, STATUS_NOT_EXPLAINED,
     BONUS_POINTS, FAIL_FACTOR,
 )
-from .module2_harvester.function_picker import functions_from_source
+from .module2_harvester.function_picker import functions_from_source, QUIZ_LANGUAGES
 from .data.demo_defend import DEMO_DEFEND_FILES
 from .schemas import VerdictEnum
 from .data.demo_personas import (
@@ -297,34 +297,49 @@ def _run_analysis(req: AnalyzeRequest, progress=None) -> PassportDocument:
 
 
 # --- Defend Your Code: optional questions about the candidate's own functions ---
-DEFEND_SKILL = "Python"
 _demo_defend_questions: Dict[str, list] = {}
 
 
 def _attach_defend(passport: PassportDocument, functions: Optional[list] = None,
-                   prebuilt: Optional[list] = None) -> PassportDocument:
-    """Marks whether Defend Your Code is available for the passport's Python claim, and re-signs it."""
-    item = next((s for s in passport.skills if normalize_skill(s.name) == DEFEND_SKILL), None)
-    if not item or item.verdict not in (VerdictEnum.VERIFIED, VerdictEnum.PARTIALLY_SUPPORTED):
-        return passport
-    reason = ""
-    if prebuilt is not None:
-        questions = prebuilt
-    else:
-        try:
-            questions, reason = defend.build_questions(functions or [], seed=passport.passport_id or "")
-        except SandboxUnavailable:
-            questions, reason = [], "The code runner was busy; re-run the analysis to enable it."
-    if questions:
-        defend.register(_passport_key(passport), item.name, questions)
-        item.authorship_check = AuthorshipCheck(
-            status=STATUS_AVAILABLE,
-            question_count=len(questions),
-            commits=sorted({f"{q['repo_url']}@{q['commit'][:7]}" for q in questions if q.get("commit")}),
-        )
-    else:
-        item.authorship_check = AuthorshipCheck(status=STATUS_UNAVAILABLE, reason=reason)
-    passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
+                   prebuilt: Optional[Dict[str, list]] = None) -> PassportDocument:
+    """
+    Marks, for each language skill backed by code, whether Defend Your Code is available (and why not),
+    registers its questions, and re-signs the passport. prebuilt maps skill -> questions (demo personas).
+    """
+    by_language: Dict[str, list] = {}
+    for f in functions or []:
+        by_language.setdefault(f["language"], []).append(f)
+    changed = False
+    for item in passport.skills:
+        if item.verdict not in (VerdictEnum.VERIFIED, VerdictEnum.PARTIALLY_SUPPORTED):
+            continue
+        skill = normalize_skill(item.name)
+        reason = ""
+        if prebuilt is not None:
+            if skill not in prebuilt:
+                continue
+            questions = prebuilt[skill]
+        else:
+            if skill not in QUIZ_LANGUAGES:
+                continue
+            try:
+                questions, reason = defend.build_questions(by_language.get(skill, []), seed=f"{passport.passport_id}:{skill}")
+            except SandboxUnavailable:
+                questions, reason = [], "The code runner was busy; re-run the analysis to enable it."
+            if not by_language.get(skill):
+                reason = f"No {skill} functions of at least 8 lines that you wrote were found."
+        if questions:
+            defend.register(_passport_key(passport), item.name, questions)
+            item.authorship_check = AuthorshipCheck(
+                status=STATUS_AVAILABLE,
+                question_count=len(questions),
+                commits=sorted({f"{q['repo_url']}@{q['commit'][:7]}" for q in questions if q.get("commit")}),
+            )
+        else:
+            item.authorship_check = AuthorshipCheck(status=STATUS_UNAVAILABLE, reason=reason)
+        changed = True
+    if changed:
+        passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
     return passport
 
 
@@ -342,7 +357,7 @@ def _demo_defend(passport: PassportDocument, persona: str) -> PassportDocument:
         except SandboxUnavailable:
             return passport
         _demo_defend_questions[persona] = questions
-    return _attach_defend(passport, prebuilt=_demo_defend_questions[persona])
+    return _attach_defend(passport, prebuilt={"Python": _demo_defend_questions[persona]})
 
 
 @app.post("/api/analyze", response_model=PassportDocument, dependencies=[Depends(limit_analysis)])

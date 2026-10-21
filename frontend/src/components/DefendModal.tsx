@@ -163,8 +163,9 @@ export const DefendModal: React.FC<DefendModalProps> = ({ skillName, passport, o
           {phase === 'intro' && (
             <>
               <p className="text-zinc-300">
-                You'll see {check?.question_count ?? 'a few'} functions from your own repositories, one at a time, and pick what each
-                call returns. It checks that you understand the code credited to you; a general quiz can't do that.
+                You'll get {check?.question_count ?? 'a few'} questions about functions from your own repositories, one at a time:
+                what a call returns, which line was hidden, or which of your functions a body belongs to. It checks that you
+                understand the code credited to you; a general quiz can't do that.
               </p>
               <ul className="space-y-1.5 text-zinc-300">
                 <li>• <strong>Optional</strong>: skipping it changes nothing.</li>
@@ -197,7 +198,13 @@ export const DefendModal: React.FC<DefendModalProps> = ({ skillName, passport, o
                   <span className="font-mono">{question.path}:{question.line}</span>
                   {question.commit && <span className="font-mono text-zinc-500">@{question.commit.slice(0, 7)}</span>}
                 </p>
-                <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-black/40 p-3 font-mono text-xs leading-relaxed text-zinc-200">{question.code}</pre>
+                <pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-black/40 p-3 font-mono text-xs leading-relaxed text-zinc-200">
+                  {question.code.split('\n').map((line, i) => (
+                    <div key={i} className={line.includes('??? (hidden line)') ? 'rounded bg-amber-500/20 text-amber-200' : undefined}>
+                      {line || ' '}
+                    </div>
+                  ))}
+                </pre>
                 {question.context.length > 0 && (
                   <details className="mt-2 text-xs text-zinc-400">
                     <summary className="cursor-pointer">Uses {question.context.length} definition{question.context.length > 1 ? 's' : ''} from the same file</summary>
@@ -205,8 +212,10 @@ export const DefendModal: React.FC<DefendModalProps> = ({ skillName, passport, o
                   </details>
                 )}
               </div>
-              <p className="text-zinc-200">What does this return?</p>
-              <pre className="overflow-x-auto rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 font-mono text-xs text-emerald-200">{question.call}</pre>
+              <p className="text-zinc-200">{question.prompt || 'What does this call return?'}</p>
+              {question.call && (
+                <pre className="overflow-x-auto rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 font-mono text-xs text-emerald-200">{question.call}</pre>
+              )}
               <div className="grid gap-2">
                 {question.options.map((opt, i) => (
                   <button
@@ -247,9 +256,11 @@ export const DefendModal: React.FC<DefendModalProps> = ({ skillName, passport, o
                       {r.correct ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <XCircle className="h-4 w-4 text-red-400" />}
                       <span className="font-mono">{r.path}</span>
                     </p>
-                    <p className="mt-1 font-mono text-xs text-zinc-200">{r.call}</p>
+                    <p className="mt-1 text-xs text-zinc-300">
+                      {r.call ? <span className="font-mono">{r.call}</span> : r.prompt}
+                    </p>
                     <p className="mt-1 text-xs text-zinc-400">
-                      Returns <span className="font-mono text-emerald-300">{r.correct_answer}</span>
+                      {r.kind === 'predict' ? 'Returns' : 'Answer'} <span className="font-mono text-emerald-300">{r.correct_answer}</span>
                       {!r.correct && <> · you answered <span className="font-mono text-red-300">{r.timed_out ? 'nothing in time' : (r.your_answer ?? 'nothing')}</span></>}
                     </p>
                   </li>
