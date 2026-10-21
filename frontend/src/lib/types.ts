@@ -140,6 +140,7 @@ export interface CertificateEvidence {
   issue_date?: string | null;
   credential_id?: string | null;
   verify_url?: string | null;
+  issuer_domain?: string | null;
   skills: string[];
   confidence_score: number;
   raw_text_snippet?: string | null;

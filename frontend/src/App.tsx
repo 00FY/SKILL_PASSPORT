@@ -12,6 +12,8 @@ import { AnalysisAlert, AnalysisNotice } from './components/AnalysisAlert';
 import { PassportDocument, SkillPassportItem } from './lib/types';
 import { request } from './lib/api';
 
+import { DEMO_PERSONAS } from './data/demoPersonas';
+
 export const App: React.FC = () => {
   const [passport, setPassport] = useState<PassportDocument | null>(null);
   const [loadError, setLoadError] = useState('');
@@ -31,8 +33,12 @@ export const App: React.FC = () => {
     setPassport(null);
     try {
       setPassport(await request<PassportDocument>(`/api/demo/${key}`));
-    } catch (e) {
-      setLoadError((e as Error).message);
+    } catch {
+      if (DEMO_PERSONAS[key]) {
+        setPassport(DEMO_PERSONAS[key]);
+      } else {
+        setLoadError('Could not reach the backend or load demo persona.');
+      }
     }
   };
 
