@@ -67,7 +67,7 @@ def test_username_only_analysis_fails_clearly_when_repos_cant_be_listed(monkeypa
     limited = FakeResponse(403, headers={"x-ratelimit-remaining": "0"}, text="rate limit")
     monkeypatch.setattr(github_api.httpx, "get", lambda url, **kw: limited)
     monkeypatch.setenv("SKILL_PASSPORT_GITHUB_API", "1")
-    res = client.post("/api/analyze", json={"github_username": "someone"})
+    res = client.post("/api/analyze", json={"candidate_name": "Some One", "github_username": "someone"})
     assert res.status_code == 503
     detail = res.json()["detail"]
     assert "Couldn't list @someone's repositories" in detail

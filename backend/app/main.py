@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .schemas import (
     ClaimsDocument, EvidenceDocument, PassportDocument,
@@ -107,10 +107,18 @@ class AnalyzeRequest(BaseModel):
     github_username: Optional[str] = None
     repo_url: Optional[str] = None
     repo_urls: List[str] = Field(default_factory=list, description=f"Up to {MAX_REPOS} public repositories")
-    candidate_name: Optional[str] = None
+    # Required: certificates are checked against it and it's the name the passport is issued to
+    candidate_name: Optional[str] = Field(default=None, validate_default=True, max_length=100)
     git_identities: List[str] = Field(default_factory=list, description="Git emails / usernames the candidate commits with")
     links: Optional[List[str]] = None
     certificates: List[CertificateEvidence] = Field(default_factory=list, description="Verified certificate credentials uploaded by candidate")
+
+    @field_validator("candidate_name")
+    @classmethod
+    def _name_required(cls, value: Optional[str]) -> str:
+        if not value or not value.strip():
+            raise ValueError("Enter the candidate's full name: certificates and the passport are checked against it")
+        return value.strip()
 
 
 class ParsedResumeResponse(BaseModel):

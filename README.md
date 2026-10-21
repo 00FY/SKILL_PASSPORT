@@ -276,7 +276,7 @@ PYTHONPATH=backend pytest tests backend/tests -v
 * A repository's homepage or deployments count as a deployment signal; liveness isn't checked.
 * Background jobs and rate-limit counters live in memory: they reset on restart and aren't shared between server processes. Use one process, or put the limits in your reverse proxy.
 * Uploaded certificates, assessment attempts and Defend Your Code questions are kept in server memory: after a restart, upload certificates again and re-run the analysis.
-* A certificate the issuer confirms counts only for the person it was issued to: the issuer's recipient name must match the candidate's name (entered, from the resume, or from the GitHub profile; a username alone isn't enough).
+* A certificate the issuer confirms counts only for the person it was issued to: the issuer's recipient name must match the candidate's name, which is required for every analysis.
 * Only the 100 most recent closed pull requests are checked for merged PRs.
 * Defend Your Code only runs Python ("what does this return?" questions) and only functions that need nothing beyond the standard library; other code gets the hidden-line and function-name questions. Brace-language functions are found by patterns, not a full parser, so unusual syntax can be missed. Questions live in server memory: after a restart, re-run the analysis to offer them again.
 * Very large repositories are analysed within the blame time budget, so authorship may be measured on a subset of files (flagged in the passport warnings).
