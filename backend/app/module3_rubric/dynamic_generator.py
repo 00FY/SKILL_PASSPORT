@@ -131,9 +131,9 @@ class DynamicQuestionGenerator:
         context: Dict[str, Any],
         api_key: str
     ) -> Optional[Dict[str, Any]]:
-        configured_model = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
+        configured_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
         models_to_try = [configured_model]
-        for fallback_model in ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash"]:
+        for fallback_model in ["gemini-3.8-flash", "gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash"]:
             if fallback_model not in models_to_try:
                 models_to_try.append(fallback_model)
 
