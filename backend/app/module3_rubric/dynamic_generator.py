@@ -110,10 +110,13 @@ class DynamicQuestionGenerator:
 
         task: Optional[Dict[str, Any]] = None
 
-        if gemini_key:
-            task = self._generate_via_gemini(skill, stage_type, difficulty, context, gemini_key)
-        elif openai_key:
+        # Prioritize OpenAI if configured, with failover to Gemini
+        if openai_key:
             task = self._generate_via_openai(skill, stage_type, difficulty, context, openai_key)
+            if not task and gemini_key:
+                task = self._generate_via_gemini(skill, stage_type, difficulty, context, gemini_key)
+        elif gemini_key:
+            task = self._generate_via_gemini(skill, stage_type, difficulty, context, gemini_key)
 
         # Validate task syntax and schema before serving
         if task and self._validate_task(task, stage_type):
