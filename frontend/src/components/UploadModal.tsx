@@ -21,6 +21,16 @@ const MAX_REPOS = 5;
 const splitList = (value: string): string[] =>
   value.split(/[\n,]+/).map(v => v.trim()).filter(Boolean);
 
+const nameTokens = (name: string) =>
+  name.toLowerCase().normalize('NFKD').replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+
+/** Same idea as the server's check: every part of the shorter name appears in the longer one (initials allowed). */
+const namesMatch = (a: string, b: string) => {
+  const [short, long] = [nameTokens(a), nameTokens(b)].sort((x, y) => x.length - y.length);
+  if (!short.length) return false;
+  return short.every(t => long.some(u => u === t || (t.length === 1 && u.startsWith(t)) || (u.length === 1 && t.startsWith(u))));
+};
+
 export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCustomVerified }) => {
   const [githubUsername, setGithubUsername] = useState('');
   const [resumeText, setResumeText] = useState('');
@@ -67,10 +77,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
     setBusyMessage(`Parsing ${file.name}…`);
     try {
       const cert = await uploadCert(file, candidateName.trim() || undefined);
+      // The candidate's name is never taken from a certificate: the certificate has to match the candidate
       setCertificates(prev => [...prev, cert]);
-      if (cert.candidate_name && !candidateName.trim()) {
-        setCandidateName(cert.candidate_name);
-      }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to parse certificate.');
     } finally {
@@ -281,6 +289,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
                   const isVerified = s === 'verified' || s === 'issuer_verified';
                   const isPending = s === 'pending' || s === 'issuer_unparsed' || s === 'issuer_unreachable';
                   const isMismatch = (c.mismatch_reason || '').toLowerCase().includes('recipient') || (c.mismatch_reason || '').toLowerCase().includes('mismatch');
+                  // The issuer confirmed it for this recipient; it only counts for the candidate if the names match
+                  const recipient = c.issuer_record?.recipient_name || '';
+                  const holder = candidateName.trim();
+                  const otherPerson = isVerified && !!recipient && !!holder && !namesMatch(recipient, holder);
+                  const holderUnknown = isVerified && !!recipient && !holder;
 
                   return (
                     <div key={c.id} className="flex items-start justify-between rounded-md border border-white/10 bg-white/[0.02] p-2.5 text-xs">
@@ -288,9 +301,14 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-semibold text-zinc-200">{c.certificate_name}</span>
                           <span className="text-amber-400 font-normal">({c.issuer})</span>
-                          {isVerified && (
+                          {isVerified && !otherPerson && (
                             <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
-                              ✓ Verified
+                              ✓ Verified{holderUnknown ? ` for ${recipient}` : ''}
+                            </span>
+                          )}
+                          {otherPerson && (
+                            <span className="inline-flex items-center gap-1 rounded bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                              ⚠ Issued to {recipient}, not {holder}: won't count
                             </span>
                           )}
                           {isPending && (
