@@ -135,7 +135,8 @@ def test_profile_warning_survives_successful_direct_repo_analysis(monkeypatch):
         signals=QualitySignals(commit_count=3),
     ))
     passport = main._run_analysis(main.AnalyzeRequest(
-        github_username="dev", repo_urls=["https://github.com/dev/app"], resume_text="Dev Engineer\nPython"
+        candidate_name="Test Candidate", github_username="dev",
+        repo_urls=["https://github.com/dev/app"], resume_text="Dev Engineer\nPython"
     ))
     assert any("rejected the configured API token" in warning for warning in passport.warnings)
 
