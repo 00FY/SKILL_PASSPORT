@@ -96,14 +96,23 @@ def test_mismatched_certificate_is_explained_in_the_passport():
 # --- No evidence, no passport ---------------------------------------------------------------------
 
 def test_empty_request_gets_no_passport():
-    res = client.post("/api/analyze", json={})
+    res = client.post("/api/analyze", json={"candidate_name": "Jane Doe"})
     assert res.status_code == 400
     assert "Nothing to analyse" in res.json()["detail"]
 
 
+def test_candidate_name_is_required():
+    for body in ({"resume_text": "Jane Doe\nSkills: Python"}, {"candidate_name": "   ", "resume_text": "Python"}):
+        for path in ("/api/analyze", "/api/jobs/analyze"):
+            res = client.post(path, json=body)
+            assert res.status_code == 422
+            assert "candidate's full name" in str(res.json()["detail"])
+
+
 def test_resume_alone_is_still_analysed():
-    res = client.post("/api/analyze", json={"resume_text": "Jane Doe\nEngineer\nSkills: Python"})
+    res = client.post("/api/analyze", json={"candidate_name": "Jane Doe", "resume_text": "Jane Doe\nEngineer\nSkills: Python"})
     assert res.status_code == 200
+    assert res.json()["candidate_name"] == "Jane Doe"
 
 
 # --- Hidden-text detector -------------------------------------------------------------------------

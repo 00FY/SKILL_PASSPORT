@@ -340,7 +340,7 @@ def test_analyze_reports_clone_failure_instead_of_demo_data(monkeypatch):
     def fail(ref, dest):
         raise RepoAccessError(f"Could not clone {ref.url}: the repository doesn't exist or is private.")
     monkeypatch.setattr(harvester_module, "clone_repo", fail)
-    res = client.post("/api/analyze", json={
+    res = client.post("/api/analyze", json={"candidate_name": "Soham Kadam", 
         "resume_text": "Sam Lee\nPython developer", "repo_urls": ["https://github.com/sam/typo-repo"]})
     assert res.status_code == 422
     assert "private" in res.json()["detail"]
@@ -351,7 +351,7 @@ def test_analyze_partial_repo_failure_is_a_warning(monkeypatch, username_repo):
     def fail(ref, dest):
         raise RepoAccessError(f"Could not clone {ref.url}: not found")
     monkeypatch.setattr(harvester_module, "clone_repo", fail)
-    res = client.post("/api/analyze", json={
+    res = client.post("/api/analyze", json={"candidate_name": "Soham Kadam", 
         "resume_text": "Soham Kadam\nBackend Developer\nPython for 2 years",
         "repo_urls": [username_repo, "https://github.com/sohamk234/missing"],
         "git_identities": ["sohamk234"]})
@@ -363,7 +363,7 @@ def test_analyze_partial_repo_failure_is_a_warning(monkeypatch, username_repo):
 
 
 def test_local_paths_rejected_by_api_by_default(username_repo):
-    res = client.post("/api/analyze", json={"resume_text": "Python", "repo_urls": [username_repo]})
+    res = client.post("/api/analyze", json={"candidate_name": "Soham Kadam", "resume_text": "Python", "repo_urls": [username_repo]})
     assert res.status_code == 400
 
 
@@ -569,7 +569,7 @@ def _wait_for(job_id, timeout=60):
 
 def test_analysis_job_runs_in_background(monkeypatch, username_repo):
     monkeypatch.setenv("SKILL_PASSPORT_ALLOW_LOCAL_REPOS", "1")
-    res = client.post("/api/jobs/analyze", json={
+    res = client.post("/api/jobs/analyze", json={"candidate_name": "Soham Kadam", 
         "resume_text": "Soham Kadam\nBackend Developer\nPython for 2 years",
         "repo_urls": [username_repo], "git_identities": ["sohamk234"]})
     assert res.status_code == 202
@@ -585,13 +585,13 @@ def test_analysis_job_reports_failure(monkeypatch):
     def fail(ref, dest):
         raise RepoAccessError(f"Could not clone {ref.url}: the repository doesn't exist or is private.")
     monkeypatch.setattr(harvester_module, "clone_repo", fail)
-    res = client.post("/api/jobs/analyze", json={"resume_text": "Python", "repo_urls": ["https://github.com/a/missing"]})
+    res = client.post("/api/jobs/analyze", json={"candidate_name": "Soham Kadam", "resume_text": "Python", "repo_urls": ["https://github.com/a/missing"]})
     body = _wait_for(res.json()["job_id"])
     assert body["status"] == "failed" and body["error_status"] == 422 and "private" in body["error"]
 
 
 def test_analysis_job_rejects_bad_urls_immediately():
-    res = client.post("/api/jobs/analyze", json={"resume_text": "Python", "repo_urls": ["file:///etc/passwd"]})
+    res = client.post("/api/jobs/analyze", json={"candidate_name": "Soham Kadam", "resume_text": "Python", "repo_urls": ["file:///etc/passwd"]})
     assert res.status_code == 400
     assert client.get("/api/jobs/does-not-exist").status_code == 404
 
@@ -613,7 +613,7 @@ def test_rate_limit_blocks_repeated_analyses(monkeypatch):
     import app.main as main_module
     from app.limits import RateLimiter
     monkeypatch.setattr(main_module, "analysis_limiter", RateLimiter(2, 3600))
-    body = {"resume_text": "Python", "repo_urls": ["file:///nope"]}
+    body = {"candidate_name": "Soham Kadam", "resume_text": "Python", "repo_urls": ["file:///nope"]}
     assert client.post("/api/jobs/analyze", json=body).status_code == 400
     assert client.post("/api/jobs/analyze", json=body).status_code == 400
     res = client.post("/api/jobs/analyze", json=body)
@@ -623,7 +623,7 @@ def test_rate_limit_blocks_repeated_analyses(monkeypatch):
 
 def test_optional_api_key(monkeypatch):
     monkeypatch.setenv("SKILL_PASSPORT_API_KEY", "s3cret")
-    body = {"resume_text": "Python", "repo_urls": ["file:///nope"]}
+    body = {"candidate_name": "Soham Kadam", "resume_text": "Python", "repo_urls": ["file:///nope"]}
     assert client.post("/api/jobs/analyze", json=body).status_code == 401
     assert client.post("/api/jobs/analyze", json=body, headers={"X-API-Key": "wrong"}).status_code == 401
     assert client.post("/api/jobs/analyze", json=body, headers={"X-API-Key": "s3cret"}).status_code == 400

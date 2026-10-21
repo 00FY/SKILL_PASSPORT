@@ -124,6 +124,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
     const hasCode = repos.length > 0 || !!githubUsername.trim();
     const hasCerts = certificates.length > 0;
 
+    if (!candidateName.trim()) {
+      setError("Enter the candidate's full name: certificates and the passport are checked against it.");
+      return;
+    }
+
     if (!hasResume && !hasCode && !hasCerts) {
       setError('Please provide at least a GitHub username, repository, resume, or certificate.');
       return;
@@ -140,7 +145,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
         : 'Evaluating claims and credentials…',
       async () => {
         const { job_id } = await postJson<{ job_id: string }>('/api/jobs/analyze', {
-          candidate_name: candidateName.trim() || undefined,
+          candidate_name: candidateName.trim(),
           github_username: githubUsername.trim() || undefined,
           resume_text: resumeText.trim() || undefined,
           repo_urls: repos,
@@ -380,8 +385,15 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
           {/* Candidate Name & Git Identities */}
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <label className={label} htmlFor="name">Candidate name <span className="font-normal text-zinc-500">(optional)</span></label>
-              <input id="name" value={candidateName} onChange={e => setCandidateName(e.target.value)} className={input} placeholder="Auto-filled from profile/resume" />
+              <label className={label} htmlFor="name">Candidate name <span className="font-normal text-red-300">(required)</span></label>
+              <input
+                id="name"
+                required
+                value={candidateName}
+                onChange={e => setCandidateName(e.target.value)}
+                className={input}
+                placeholder="Full name, as on certificates"
+              />
             </div>
             <div>
               <label className={label} htmlFor="idents">Git email or username <span className="font-normal text-zinc-500">(recommended)</span></label>
@@ -416,7 +428,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onCus
           <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-zinc-300 hover:bg-white/5">Cancel</button>
           <button
             onClick={analyze}
-            disabled={busy}
+            disabled={busy || !candidateName.trim()}
+            title={candidateName.trim() ? undefined : "Enter the candidate's name first"}
             className="flex items-center gap-2 rounded-lg bg-indigo-500 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-50 shadow-md shadow-indigo-500/20"
           >
             Run Multi-Signal Analysis
