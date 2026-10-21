@@ -3,7 +3,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Depends, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,7 @@ from .module2_harvester import (
 from .module2_harvester.repo_source import local_repos_allowed
 from .module2_harvester.harvester_service import MAX_REPOS
 from .module4_certs import CertificateParser
+from .report.pdf_report import render_pdf
 from .module4_certs.cert_store import CertificateStore, check_holder
 from .module3_rubric.sandbox import SandboxUnavailable
 from .module3_rubric import (
@@ -709,6 +710,18 @@ def defend_apply(req: DefendApplyRequest):
     passport.issued_at = datetime.now(timezone.utc).isoformat()
     passport.tamper_proof_hash = CryptoSigner.sign_passport(passport.model_dump(mode="json"))
     return passport
+
+
+# --- PDF report ---
+@app.post("/api/report/pdf")
+def passport_pdf_report(passport: PassportDocument):
+    """A printable report of a signed passport. Edited passports are refused, so a PDF can't dress one up."""
+    if not CryptoSigner.verify_passport_signature(passport.model_dump(mode="json"), passport.tamper_proof_hash)["valid"]:
+        raise HTTPException(status_code=400, detail="This passport's signature is invalid, so no report can be made from it.")
+    pdf = render_pdf(passport)
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", passport.candidate_name).strip("-").lower() or "candidate"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="skill-passport-{slug}.pdf"'})
 
 
 # --- Cryptographic Verification ---

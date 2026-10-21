@@ -244,6 +244,7 @@ Open [http://localhost:3000](http://localhost:3000), then click **Analyze a resu
 | `POST /api/jobs/analyze` → `GET /api/jobs/{id}` | Start an analysis in the background and poll for its progress and the signed passport. This is what the web app uses. |
 | `POST /api/analyze` | The same analysis in a single request, for scripts (can take minutes). |
 | `POST /api/verify-signature` | Check that a passport JSON hasn't been altered. |
+| `POST /api/report/pdf` | PDF report of a signed passport (scores, claims and evidence, problems, certificates, next steps, audit trail, signature with QR code). Edited passports are refused. |
 | `POST /api/simulate` | What-if recalculation (not signed). |
 | `POST /api/assessment/start` → `POST /api/assessment/submit-step` → `POST /api/quiz/apply` | Adaptive skill assessment for a signed passport; the finished grade is applied and the passport re-signed. |
 | `POST /api/upload-cert` | Parse and verify a certificate. The result is kept on the server; an analysis accepts certificates only by the id returned here. |

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Loader2, ShieldAlert, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileDown, Loader2, ShieldAlert, XCircle } from 'lucide-react';
 import { PassportDocument } from '../lib/types';
-import { postJson } from '../lib/api';
+import { downloadPassportPdf, postJson } from '../lib/api';
 import { claimRows, problemRows } from './ClaimList';
 import { PillarScoreBar } from './PillarScoreBar';
 
@@ -9,6 +9,20 @@ type SignatureState = 'checking' | 'valid' | 'invalid' | 'error';
 
 export const PassportSummary: React.FC<{ passport: PassportDocument }> = ({ passport }) => {
   const [signature, setSignature] = useState<SignatureState>('checking');
+  const [downloading, setDownloading] = useState(false);
+  const [reportError, setReportError] = useState('');
+
+  const downloadReport = async () => {
+    setDownloading(true);
+    setReportError('');
+    try {
+      await downloadPassportPdf(passport);
+    } catch (e) {
+      setReportError((e as Error).message);
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   // Ask the backend to verify the HMAC signature of exactly what is displayed
   useEffect(() => {
@@ -70,8 +84,18 @@ export const PassportSummary: React.FC<{ passport: PassportDocument }> = ({ pass
               </span>
             )}
             <SignatureBadge state={signature} />
+            <button
+              onClick={downloadReport}
+              disabled={downloading || signature !== 'valid'}
+              title={signature === 'valid' ? 'Download a PDF report of this passport' : 'Reports are made only from passports with a valid signature'}
+              className="flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-sm text-zinc-200 transition hover:bg-white/10 disabled:opacity-50"
+            >
+              {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
+              PDF report
+            </button>
           </div>
         </div>
+        {reportError && <p className="mt-2 text-sm text-red-300">{reportError}</p>}
 
         <p className="mt-4 text-lg">
           <strong className={verified > 0 ? 'text-emerald-300' : 'text-zinc-200'}>{verified} of {rows.length}</strong> claims verified by code
